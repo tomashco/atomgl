@@ -159,6 +159,7 @@ static QueueHandle_t display_messages_queue;
 
 static NativeHandlerResult display_driver_consume_mailbox(Context *ctx);
 static void display_init(Context *ctx, term opts);
+static void display_init_gc9a01(struct SPI *spi);
 
 static inline void writedata(struct SPI *spi, uint8_t data)
 {
@@ -167,7 +168,7 @@ static inline void writedata(struct SPI *spi, uint8_t data)
     spi_device_release_bus(spi->spi_disp.handle);
 }
 
-static inline void writecommand(struct SPI *spi, uint8_t cmd)
+static inline void writecommand(struct SPI *spi, uint8_t command)
 {
     gpio_set_level(spi->dc_gpio, 0);
     writedata(spi, command);
@@ -177,12 +178,12 @@ static inline void writecommand(struct SPI *spi, uint8_t cmd)
 
 static inline void set_screen_paint_area(struct SPI *spi, int x, int y, int width, int height)
 {
-    writecommand(spi, ST7789_CASET);
+    writecommand(spi, GC9A01_CASET);
     spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
     spi_display_write(&spi->spi_disp, 32, (x << 16) | ((x + width) - 1));
     spi_device_release_bus(spi->spi_disp.handle);
 
-    writecommand(spi, ST7789_RASET);
+    writecommand(spi, GC9A01_RASET);
     spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
     spi_display_write(&spi->spi_disp, 32, (y << 16) | ((y + height) - 1));
     spi_device_release_bus(spi->spi_disp.handle);
@@ -446,7 +447,7 @@ static void do_update(Context *ctx, term display_list)
     struct SPI *spi = ctx->platform_data;
 
     set_screen_paint_area(spi, 0, 0, screen_width, screen_height);
-    writecommand(spi, ST7789_RAMWR);
+    writecommand(spi, GC9A01_RAMWR);
     spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
 
     bool transaction_in_progress = false;
@@ -489,7 +490,7 @@ static void draw_buffer(struct SPI *spi, int x, int y, int width, int height, co
 
     set_screen_paint_area(spi, x, y, width, height);
 
-    writecommand(spi, ST7789_RAMWR);
+    writecommand(spi, GC9A01_RAMWR);
 
     int dest_size = width * height;
     int buf_pixel_size = (dest_size > 1024) ? 1024 : dest_size;
