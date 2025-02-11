@@ -51,8 +51,7 @@
 #include "spi_display.h"
 
 // if needed it can be lowered to 27000000
-#define SPI_CLOCK_HZ 12000000
-// #define SPI_CLOCK_HZ 40000000
+#define SPI_CLOCK_HZ 27000000
 #define SPI_MODE 0
 
 #define CHAR_WIDTH 8
@@ -165,9 +164,11 @@ static QueueHandle_t display_messages_queue;
 static NativeHandlerResult display_driver_consume_mailbox(Context *ctx);
 static void display_init(Context *ctx, term opts);
 static void display_init_gc9a01(struct SPI *spi);
+static void draw_test_pattern(struct SPI *spi);
 
 static inline void writedata(struct SPI *spi, uint8_t data)
 {
+    ESP_LOGD(TAG, "Writing data: 0x%02X", data);
     spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
     spi_display_write(&spi->spi_disp, 8, data);
     spi_device_release_bus(spi->spi_disp.handle);
@@ -175,6 +176,7 @@ static inline void writedata(struct SPI *spi, uint8_t data)
 
 static inline void writecommand(struct SPI *spi, uint8_t command)
 {
+    ESP_LOGD(TAG, "Writing command: 0x%02X", command);
     gpio_set_level(spi->dc_gpio, 0);
     writedata(spi, command);
     gpio_set_level(spi->dc_gpio, 1);
@@ -652,6 +654,21 @@ static void send_message(term pid, term message, GlobalContext *global)
     globalcontext_send_message(global, local_process_id, message);
 }
 
+static void test_display_with_backlight_config(struct SPI *spi, struct BacklightGPIOConfig *config, const char *test_name)
+{
+    ESP_LOGI(TAG, "=== Starting test: %s ===", test_name);
+    ESP_LOGI(TAG, "Backlight config - GPIO: %d, Active High: %d, Enabled: %d",
+        config->gpio, config->active_high, config->enabled);
+
+    backlight_gpio_init(config);
+    delay(100); // Give some time for backlight to stabilize
+
+    draw_test_pattern(spi);
+
+    ESP_LOGI(TAG, "=== Completed test: %s ===\n", test_name);
+    delay(2000); // Pause between tests
+}
+
 static void display_init(Context *ctx, term opts)
 {
     ESP_LOGI(TAG, "Starting display initialization...");
@@ -692,7 +709,16 @@ static void display_init(Context *ctx, term opts)
     spi_display_init_config(&spi_config);
     spi_config.mode = SPI_MODE;
     spi_config.clock_speed_hz = SPI_CLOCK_HZ;
+    spi_config.bit_lsb_first = false; // MSB first
+    ESP_LOGI(TAG, "SPI Config - Mode: %d, Clock: %d Hz", spi_config.mode, spi_config.clock_speed_hz);
     spi_display_parse_config(&spi_config, opts, ctx->global);
+
+    // Log parsed SPI config
+    ESP_LOGI(TAG, "Parsed SPI Config - MODE: %d, CLK: %d, CS: %d",
+        spi_config.mode,
+        spi_config.clock_speed_hz,
+        spi_config.cs_gpio);
+
     spi_display_init(&spi->spi_disp, &spi_config);
 
     bool ok = display_common_gpio_from_opts(opts, ATOM_STR("\x2", "dc"), &spi->dc_gpio, ctx->global);
@@ -723,7 +749,7 @@ static void display_init(Context *ctx, term opts)
     display_init_gc9a01(spi);
     ESP_LOGI(TAG, "GC9A01 initialization completed");
 
-    // Add backlight initialization with logging
+    // Get the base backlight configuration from options
     struct BacklightGPIOConfig backlight_config;
     backlight_gpio_init_config(&backlight_config);
 
@@ -743,22 +769,28 @@ static void display_init(Context *ctx, term opts)
                                                        "high")
                 ? "high"
                 : "low");
+    } else {
+        ESP_LOGI(TAG, "No backlight_active option specified, defaulting to active high");
     }
 
     term backlight_enabled = interop_kv_get_value_default(opts, ATOM_STR("\x10", "backlight_enabled"), term_invalid_term(), ctx->global);
     if (backlight_enabled != term_invalid_term()) {
         ESP_LOGI(TAG, "Backlight enabled setting: %s",
             backlight_enabled == TRUE_ATOM ? "true" : "false");
+    } else {
+        ESP_LOGI(TAG, "No backlight_enabled option specified, defaulting to enabled");
     }
 
     backlight_gpio_parse_config(&backlight_config, opts, ctx->global);
-    ESP_LOGI(TAG, "Parsed backlight config - GPIO: %d, Active High: %d, Enabled: %d",
-        backlight_config.gpio,
-        backlight_config.active_high,
-        backlight_config.enabled);
+
+    // test_display_with_backlight_config(spi, &backlight_config, "Active High, Enabled");
 
     backlight_gpio_init(&backlight_config);
-    ESP_LOGI(TAG, "Backlight initialized");
+    ESP_LOGI(TAG, "Restored original backlight configuration");
+
+    // // Draw test pattern
+    // draw_test_pattern(spi);
+    ESP_LOGI(TAG, "Test pattern drawn");
 
     ctx->platform_data = spi;
     spi->ctx = ctx;
@@ -771,141 +803,149 @@ static void display_init_gc9a01(struct SPI *spi)
 {
     ESP_LOGI(TAG, "Sending GC9A01 initialization commands...");
 
-    // Power control
-    writecommand(spi, 0xEF);
+    // Initial delay after reset
+    delay(120);
 
-    // Power control
+    writecommand(spi, 0xEF);
     writecommand(spi, 0xEB);
     writedata(spi, 0x14);
 
-    // Inter MCU Register
     writecommand(spi, 0xFE);
     writecommand(spi, 0xEF);
 
-    // Power control 1
     writecommand(spi, 0xEB);
     writedata(spi, 0x14);
 
-    // Power control 2
     writecommand(spi, 0x84);
     writedata(spi, 0x40);
 
-    // Power control 3
     writecommand(spi, 0x85);
     writedata(spi, 0xFF);
 
-    // Power control 4
     writecommand(spi, 0x86);
     writedata(spi, 0xFF);
 
-    // Power control 5
     writecommand(spi, 0x87);
     writedata(spi, 0xFF);
 
-    // Power control 6
     writecommand(spi, 0x88);
     writedata(spi, 0x0A);
 
-    // Power control 7
     writecommand(spi, 0x89);
     writedata(spi, 0x21);
 
-    // Power control 8
     writecommand(spi, 0x8A);
     writedata(spi, 0x00);
 
-    // Power control 9
     writecommand(spi, 0x8B);
     writedata(spi, 0x80);
 
-    // Power control 10
     writecommand(spi, 0x8C);
     writedata(spi, 0x01);
 
-    // Power control 11
     writecommand(spi, 0x8D);
     writedata(spi, 0x01);
 
-    // Power control 12
     writecommand(spi, 0x8E);
     writedata(spi, 0xFF);
 
-    // Power control 13
     writecommand(spi, 0x8F);
     writedata(spi, 0xFF);
 
     // Display Function Control
     writecommand(spi, 0xB6);
     writedata(spi, 0x00);
-    writedata(spi, 0x00);
+    writedata(spi, 0x20); // Changed: was 0x00
 
-    // VCOM Control
-    writecommand(spi, 0xC5);
-    writedata(spi, 0x0F);
+    writecommand(spi, 0x36);
+    writedata(spi, 0x08); // Changed: different orientation setting
 
-    // Frame rate control
-    writecommand(spi, 0xC6);
-    writedata(spi, 0x13); // 72Hz
+    writecommand(spi, 0x3A);
+    writedata(spi, 0x05); // 16-bit color
 
     // Positive Voltage Gamma Control
     writecommand(spi, 0xE0);
     writedata(spi, 0xD0);
-    writedata(spi, 0x00);
-    writedata(spi, 0x02);
-    writedata(spi, 0x07);
-    writedata(spi, 0x0A);
-    writedata(spi, 0x28);
-    writedata(spi, 0x32);
-    writedata(spi, 0x44);
-    writedata(spi, 0x42);
-    writedata(spi, 0x06);
-    writedata(spi, 0x0E);
-    writedata(spi, 0x12);
+    writedata(spi, 0x08);
+    writedata(spi, 0x11);
+    writedata(spi, 0x08);
+    writedata(spi, 0x0C);
+    writedata(spi, 0x15);
+    writedata(spi, 0x39);
+    writedata(spi, 0x33);
+    writedata(spi, 0x50);
+    writedata(spi, 0x36);
+    writedata(spi, 0x13);
     writedata(spi, 0x14);
-    writedata(spi, 0x17);
+    writedata(spi, 0x29);
+    writedata(spi, 0x2D);
 
     // Negative Voltage Gamma Control
     writecommand(spi, 0xE1);
     writedata(spi, 0xD0);
-    writedata(spi, 0x00);
-    writedata(spi, 0x02);
-    writedata(spi, 0x07);
-    writedata(spi, 0x0A);
-    writedata(spi, 0x28);
+    writedata(spi, 0x08);
+    writedata(spi, 0x10);
+    writedata(spi, 0x08);
+    writedata(spi, 0x06);
+    writedata(spi, 0x06);
+    writedata(spi, 0x39);
+    writedata(spi, 0x44);
+    writedata(spi, 0x51);
+    writedata(spi, 0x0B);
+    writedata(spi, 0x16);
+    writedata(spi, 0x14);
+    writedata(spi, 0x2F);
     writedata(spi, 0x31);
-    writedata(spi, 0x54);
-    writedata(spi, 0x47);
-    writedata(spi, 0x0E);
-    writedata(spi, 0x1C);
-    writedata(spi, 0x17);
-    writedata(spi, 0x1B);
-    writedata(spi, 0x1E);
 
-    // Set color mode to 16-bit per pixel (RGB565)
-    writecommand(spi, GC9A01_COLMOD);
-    writedata(spi, 0x55); // 16-bit color
-    ESP_LOGI(TAG, "Color mode set to 16-bit RGB565");
+    // Sleep Out
+    writecommand(spi, 0x11);
+    delay(120);
 
-    // Memory access control (determines how frame buffer is written)
-    writecommand(spi, GC9A01_MADCTL);
-    writedata(spi, TFT_MAD_COLOR_ORDER | GC9A01_MADCTL_MX); // Add MX bit for proper orientation
-    ESP_LOGI(TAG, "Memory access control configured");
-
-    // Exit sleep mode
-    writecommand(spi, GC9A01_SLPOUT);
-    ESP_LOGI(TAG, "Exiting sleep mode");
-    delay(120); // Required delay
-
-    // Normal display mode on
-    writecommand(spi, GC9A01_NORON);
+    // Display ON
+    writecommand(spi, 0x29);
     delay(20);
+}
 
-    // Display inversion on (GC9A01 seems to need this)
-    writecommand(spi, GC9A01_INVON);
-    delay(10);
+static void draw_test_pattern(struct SPI *spi)
+{
+    ESP_LOGI(TAG, "Drawing test pattern - random pixels");
 
-    // Turn on the display
-    writecommand(spi, GC9A01_DISPON);
-    ESP_LOGI(TAG, "Display turned on");
-    delay(20);
+    set_screen_paint_area(spi, 0, 0, GC9A01_TFTWIDTH, GC9A01_TFTHEIGHT);
+    writecommand(spi, GC9A01_RAMWR);
+
+    // Create a buffer for one pixel
+    uint16_t *pixel = heap_caps_malloc(sizeof(uint16_t), MALLOC_CAP_DMA);
+    if (!pixel) {
+        ESP_LOGE(TAG, "Failed to allocate test pattern buffer");
+        return;
+    }
+
+    spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
+
+    // Draw random colored pixels one by one
+    for (int y = 0; y < GC9A01_TFTHEIGHT; y++) {
+        for (int x = 0; x < GC9A01_TFTWIDTH; x++) {
+            // Generate random RGB565 color
+            uint16_t color = (rand() & 0xF800) | // Random red
+                (rand() & 0x07E0) | // Random green
+                (rand() & 0x001F); // Random blue
+
+            pixel[0] = SPI_SWAP_DATA_TX(color, 16);
+
+            // Write single pixel
+            spi_display_dmawrite(&spi->spi_disp, sizeof(uint16_t), pixel);
+
+            // Small delay between pixels (1ms)
+            delay(5);
+
+            if ((x % 20) == 0 && (y % 20) == 0) {
+                ESP_LOGI(TAG, "Drawing pixel at %d,%d with color 0x%04X", x, y, color);
+            }
+        }
+    }
+
+    spi_device_release_bus(spi->spi_disp.handle);
+    free(pixel);
+
+    ESP_LOGI(TAG, "Test pattern completed");
 }
