@@ -51,7 +51,8 @@
 #include "spi_display.h"
 
 // if needed it can be lowered to 27000000
-#define SPI_CLOCK_HZ 40000000
+#define SPI_CLOCK_HZ 12000000
+// #define SPI_CLOCK_HZ 40000000
 #define SPI_MODE 0
 
 #define CHAR_WIDTH 8
@@ -121,7 +122,7 @@ static inline uint16_t alpha_blend_rgb565(uint32_t fg, uint32_t bg, uint8_t alph
     bg = (bg | (bg << 16)) & 0b00000111111000001111100000011111;
     fg = (fg | (fg << 16)) & 0b00000111111000001111100000011111;
     uint32_t result = ((((fg - bg) * alpha) >> 5) + bg) & 0b00000111111000001111100000011111;
-    return (uint16_t)((result >> 16) | result);
+    return (uint16_t) ((result >> 16) | result);
 }
 
 static inline uint8_t rgba8888_get_alpha(uint32_t color)
@@ -135,7 +136,7 @@ static inline uint16_t rgba8888_color_to_rgb565(struct Screen *s, uint32_t color
     uint8_t g = (color >> 16) & 0xFF;
     uint8_t b = (color >> 8) & 0xFF;
 
-    return (((uint16_t)(r >> 3)) << 11) | (((uint16_t)(g >> 2)) << 5) | ((uint16_t) b >> 3);
+    return (((uint16_t) (r >> 3)) << 11) | (((uint16_t) (g >> 2)) << 5) | ((uint16_t) b >> 3);
 }
 
 static inline uint16_t rgb565_color_to_surface(struct Screen *s, uint16_t color16)
@@ -174,7 +175,6 @@ static inline void writecommand(struct SPI *spi, uint8_t command)
     writedata(spi, command);
     gpio_set_level(spi->dc_gpio, 1);
 }
-
 
 static inline void set_screen_paint_area(struct SPI *spi, int x, int y, int width, int height)
 {
@@ -437,11 +437,11 @@ static void do_update(Context *ctx, term display_list)
     BaseDisplayItem *items = malloc(sizeof(BaseDisplayItem) * len);
 
     term t = display_list;
+
     for (int i = 0; i < len; i++) {
         init_item(&items[i], term_get_list_head(t), ctx);
         t = term_get_list_tail(t);
     }
-
     int screen_width = screen->w;
     int screen_height = screen->h;
     struct SPI *spi = ctx->platform_data;
@@ -453,6 +453,9 @@ static void do_update(Context *ctx, term display_list)
     bool transaction_in_progress = false;
 
     for (int ypos = 0; ypos < screen_height; ypos++) {
+        // Clear the line buffer
+        memset(screen->pixels, 0, screen->w * sizeof(uint16_t));
+        
         int xpos = 0;
         while (xpos < screen_width) {
             int drawn_pixels = draw_x(xpos, ypos, items, len);
@@ -461,16 +464,11 @@ static void do_update(Context *ctx, term display_list)
 
         if (transaction_in_progress) {
             spi_transaction_t *trans;
-            // I did a quick measurement, and most of the time is spent waiting for DMA transaction
-            // eg. 23 us spent in draw_x, 188 us spent in spi_device_get_trans_result
             spi_device_get_trans_result(spi->spi_disp.handle, &trans, portMAX_DELAY);
         }
 
-        // NEW CODE
-        void *tmp = screen->pixels;
-        screen->pixels = screen->pixels_out;
-        screen->pixels_out = tmp;
-        spi_display_dmawrite(&spi->spi_disp, screen_width * sizeof(uint16_t), screen->pixels_out);
+        // Send the line
+        spi_display_dmawrite(&spi->spi_disp, screen_width * sizeof(uint16_t), screen->pixels);
         transaction_in_progress = true;
     }
 
@@ -480,7 +478,6 @@ static void do_update(Context *ctx, term display_list)
     }
 
     spi_device_release_bus(spi->spi_disp.handle);
-
     destroy_items(items, len);
 }
 
@@ -519,7 +516,6 @@ static void draw_buffer(struct SPI *spi, int x, int y, int width, int height, co
 
     free(tmpbuf);
 }
-
 
 static void process_message(Message *message, Context *ctx)
 {
@@ -573,7 +569,6 @@ static void process_message(Message *message, Context *ctx)
     END_WITH_STACK_HEAP(heap, ctx->global);
 }
 
-
 static void process_messages(void *arg)
 {
     struct SPI *args = arg;
@@ -613,7 +608,7 @@ Context *gc9a01_display_create_port(GlobalContext *global, term opts)
     ctx->native_handler = display_driver_consume_mailbox;
     display_init(ctx, opts);
     return ctx;
-} 
+}
 
 static void send_message(term pid, term message, GlobalContext *global)
 {
@@ -621,26 +616,48 @@ static void send_message(term pid, term message, GlobalContext *global)
     globalcontext_send_message(global, local_process_id, message);
 }
 
-
 static void display_init(Context *ctx, term opts)
 {
-    struct SPI *spi = malloc(sizeof(struct SPI));
-    if (!spi) {
-        ESP_LOGE(TAG, "Failed to allocate SPI structure");
+    ESP_LOGI(TAG, "Free DMA memory: %d", heap_caps_get_free_size(MALLOC_CAP_DMA));
+    ESP_LOGI(TAG, "Largest free DMA block: %d", heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+    
+    screen = malloc(sizeof(struct Screen));
+    if (!screen) {
+        ESP_LOGE(TAG, "Failed to allocate screen structure");
         return;
     }
 
+    screen->w = GC9A01_TFTWIDTH;
+    screen->h = GC9A01_TFTHEIGHT;
+
+    // Allocate just one line of pixels
+    screen->pixels = heap_caps_malloc(screen->w * sizeof(uint16_t), MALLOC_CAP_DMA);
+    if (!screen->pixels) {
+        ESP_LOGE(TAG, "Failed to allocate pixels buffer");
+        free(screen);
+        screen = NULL;
+        return;
+    }
+
+    // We don't need pixels_out anymore since we're doing line-by-line
+    screen->pixels_out = NULL;
+
+    display_messages_queue = xQueueCreate(32, sizeof(Message *));
+
+    struct SPI *spi = malloc(sizeof(struct SPI));
+    ctx->platform_data = spi;
+
+    spi->ctx = ctx;
+
     struct SPIDisplayConfig spi_config;
     spi_display_init_config(&spi_config);
-    spi_config.clock_speed_hz = SPI_CLOCK_HZ;
     spi_config.mode = SPI_MODE;
+    spi_config.clock_speed_hz = SPI_CLOCK_HZ;
     spi_display_parse_config(&spi_config, opts, ctx->global);
     spi_display_init(&spi->spi_disp, &spi_config);
 
-    bool ok = display_common_gpio_from_opts(
-        opts, ATOM_STR("\x2", "dc"), &spi->dc_gpio, ctx->global);
-    ok = ok && display_common_gpio_from_opts(
-        opts, ATOM_STR("\x5", "reset"), &spi->reset_gpio, ctx->global);
+    bool ok = display_common_gpio_from_opts(opts, ATOM_STR("\x2", "dc"), &spi->dc_gpio, ctx->global);
+    ok = ok && display_common_gpio_from_opts(opts, ATOM_STR("\x5", "reset"), &spi->reset_gpio, ctx->global);
 
     if (!ok) {
         ESP_LOGE(TAG, "Failed init: invalid GPIO configuration");
