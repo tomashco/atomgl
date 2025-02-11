@@ -84,6 +84,10 @@
 #define TFT_MAD_BGR 0x08
 #define TFT_MAD_COLOR_ORDER TFT_MAD_RGB
 
+#define GC9A01_RST_DELAY 120 // ms
+#define GC9A01_SLPIN_DELAY 120 // ms
+#define GC9A01_SLPOUT_DELAY 120 // ms
+
 #include "font.c"
 
 static const char *TAG = "gc9a01_display_driver";
@@ -431,10 +435,17 @@ static int draw_x(int xpos, int ypos, BaseDisplayItem *items, int items_count)
 
 static void do_update(Context *ctx, term display_list)
 {
+    ESP_LOGI(TAG, "Starting display update");
+
     int proper;
     int len = term_list_length(display_list, &proper);
+    ESP_LOGI(TAG, "Display list length: %d", len);
 
     BaseDisplayItem *items = malloc(sizeof(BaseDisplayItem) * len);
+    if (!items) {
+        ESP_LOGE(TAG, "Failed to allocate display items");
+        return;
+    }
 
     term t = display_list;
 
@@ -453,9 +464,13 @@ static void do_update(Context *ctx, term display_list)
     bool transaction_in_progress = false;
 
     for (int ypos = 0; ypos < screen_height; ypos++) {
+        if (ypos == 0 || ypos == screen_height - 1) {
+            ESP_LOGI(TAG, "Drawing line %d of %d", ypos, screen_height);
+        }
+
         // Clear the line buffer
         memset(screen->pixels, 0, screen->w * sizeof(uint16_t));
-        
+
         int xpos = 0;
         while (xpos < screen_width) {
             int drawn_pixels = draw_x(xpos, ypos, items, len);
@@ -479,10 +494,14 @@ static void do_update(Context *ctx, term display_list)
 
     spi_device_release_bus(spi->spi_disp.handle);
     destroy_items(items, len);
+
+    ESP_LOGI(TAG, "Display update completed");
 }
 
 static void draw_buffer(struct SPI *spi, int x, int y, int width, int height, const void *imgdata)
 {
+    ESP_LOGI(TAG, "Drawing buffer at x:%d y:%d w:%d h:%d", x, y, width, height);
+
     const uint16_t *data = imgdata;
 
     set_screen_paint_area(spi, x, y, width, height);
@@ -515,6 +534,8 @@ static void draw_buffer(struct SPI *spi, int x, int y, int width, int height, co
     spi_device_release_bus(spi->spi_disp.handle);
 
     free(tmpbuf);
+
+    ESP_LOGI(TAG, "Buffer drawing completed");
 }
 
 static void process_message(Message *message, Context *ctx)
@@ -596,10 +617,25 @@ static NativeHandlerResult display_driver_consume_mailbox(Context *ctx)
 
 static void set_rotation(struct SPI *spi, int rotation)
 {
-    if (rotation == 1) {
-        writecommand(spi, GC9A01_MADCTL);
-        writedata(spi, TFT_MAD_COLOR_ORDER);
+    uint8_t madctl = TFT_MAD_COLOR_ORDER;
+
+    switch (rotation) {
+        case 3:
+            madctl |= GC9A01_MADCTL_MX | GC9A01_MADCTL_MY | GC9A01_MADCTL_MV;
+            break;
+        case 2:
+            madctl |= GC9A01_MADCTL_MX | GC9A01_MADCTL_MY;
+            break;
+        case 1:
+            madctl |= GC9A01_MADCTL_MV;
+            break;
+        case 0:
+        default:
+            break;
     }
+
+    writecommand(spi, GC9A01_MADCTL);
+    writedata(spi, madctl);
 }
 
 Context *gc9a01_display_create_port(GlobalContext *global, term opts)
@@ -618,14 +654,16 @@ static void send_message(term pid, term message, GlobalContext *global)
 
 static void display_init(Context *ctx, term opts)
 {
+    ESP_LOGI(TAG, "Starting display initialization...");
     ESP_LOGI(TAG, "Free DMA memory: %d", heap_caps_get_free_size(MALLOC_CAP_DMA));
     ESP_LOGI(TAG, "Largest free DMA block: %d", heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
-    
+
     screen = malloc(sizeof(struct Screen));
     if (!screen) {
         ESP_LOGE(TAG, "Failed to allocate screen structure");
         return;
     }
+    ESP_LOGI(TAG, "Screen structure allocated successfully");
 
     screen->w = GC9A01_TFTWIDTH;
     screen->h = GC9A01_TFTHEIGHT;
@@ -638,6 +676,7 @@ static void display_init(Context *ctx, term opts)
         screen = NULL;
         return;
     }
+    ESP_LOGI(TAG, "Pixel buffer allocated successfully");
 
     // We don't need pixels_out anymore since we're doing line-by-line
     screen->pixels_out = NULL;
@@ -665,18 +704,61 @@ static void display_init(Context *ctx, term opts)
         return;
     }
 
-    // Reset
+    ESP_LOGI(TAG, "Starting GPIO initialization - DC GPIO: %d, Reset GPIO: %d", spi->dc_gpio, spi->reset_gpio);
+
+    // Reset sequence
     gpio_set_direction(spi->reset_gpio, GPIO_MODE_OUTPUT);
     gpio_set_level(spi->reset_gpio, 1);
-    vTaskDelay(50 / portTICK_PERIOD_MS);
+    delay(GC9A01_RST_DELAY);
     gpio_set_level(spi->reset_gpio, 0);
-    vTaskDelay(50 / portTICK_PERIOD_MS);
+    delay(GC9A01_RST_DELAY);
     gpio_set_level(spi->reset_gpio, 1);
-    vTaskDelay(50 / portTICK_PERIOD_MS);
+    delay(GC9A01_RST_DELAY);
+    ESP_LOGI(TAG, "Reset sequence completed");
 
     gpio_set_direction(spi->dc_gpio, GPIO_MODE_OUTPUT);
 
+    // Initialize display
+    ESP_LOGI(TAG, "Starting GC9A01 initialization...");
     display_init_gc9a01(spi);
+    ESP_LOGI(TAG, "GC9A01 initialization completed");
+
+    // Add backlight initialization with logging
+    struct BacklightGPIOConfig backlight_config;
+    backlight_gpio_init_config(&backlight_config);
+
+    // Log the received options
+    ESP_LOGI(TAG, "Display options received:");
+    term backlight_pin = interop_kv_get_value_default(opts, ATOM_STR("\x9", "backlight"), term_invalid_term(), ctx->global);
+    if (backlight_pin != term_invalid_term()) {
+        ESP_LOGI(TAG, "Backlight pin configured in options: %d", term_to_int(backlight_pin));
+    } else {
+        ESP_LOGI(TAG, "No backlight pin specified in options");
+    }
+
+    term backlight_active = interop_kv_get_value_default(opts, ATOM_STR("\xF", "backlight_active"), term_invalid_term(), ctx->global);
+    if (backlight_active != term_invalid_term()) {
+        ESP_LOGI(TAG, "Backlight active mode specified: %s",
+            backlight_active == context_make_atom(ctx, "\x4"
+                                                       "high")
+                ? "high"
+                : "low");
+    }
+
+    term backlight_enabled = interop_kv_get_value_default(opts, ATOM_STR("\x10", "backlight_enabled"), term_invalid_term(), ctx->global);
+    if (backlight_enabled != term_invalid_term()) {
+        ESP_LOGI(TAG, "Backlight enabled setting: %s",
+            backlight_enabled == TRUE_ATOM ? "true" : "false");
+    }
+
+    backlight_gpio_parse_config(&backlight_config, opts, ctx->global);
+    ESP_LOGI(TAG, "Parsed backlight config - GPIO: %d, Active High: %d, Enabled: %d",
+        backlight_config.gpio,
+        backlight_config.active_high,
+        backlight_config.enabled);
+
+    backlight_gpio_init(&backlight_config);
+    ESP_LOGI(TAG, "Backlight initialized");
 
     ctx->platform_data = spi;
     spi->ctx = ctx;
@@ -687,163 +769,143 @@ static void display_init(Context *ctx, term opts)
 
 static void display_init_gc9a01(struct SPI *spi)
 {
-    // Initialize GC9A01 display
+    ESP_LOGI(TAG, "Sending GC9A01 initialization commands...");
+
+    // Power control
     writecommand(spi, 0xEF);
+
+    // Power control
     writecommand(spi, 0xEB);
     writedata(spi, 0x14);
 
+    // Inter MCU Register
     writecommand(spi, 0xFE);
     writecommand(spi, 0xEF);
 
+    // Power control 1
     writecommand(spi, 0xEB);
     writedata(spi, 0x14);
 
+    // Power control 2
     writecommand(spi, 0x84);
     writedata(spi, 0x40);
 
+    // Power control 3
     writecommand(spi, 0x85);
     writedata(spi, 0xFF);
 
+    // Power control 4
     writecommand(spi, 0x86);
     writedata(spi, 0xFF);
 
+    // Power control 5
     writecommand(spi, 0x87);
     writedata(spi, 0xFF);
 
+    // Power control 6
     writecommand(spi, 0x88);
     writedata(spi, 0x0A);
 
+    // Power control 7
     writecommand(spi, 0x89);
     writedata(spi, 0x21);
 
+    // Power control 8
     writecommand(spi, 0x8A);
     writedata(spi, 0x00);
 
+    // Power control 9
     writecommand(spi, 0x8B);
     writedata(spi, 0x80);
 
+    // Power control 10
     writecommand(spi, 0x8C);
     writedata(spi, 0x01);
 
+    // Power control 11
     writecommand(spi, 0x8D);
     writedata(spi, 0x01);
 
+    // Power control 12
     writecommand(spi, 0x8E);
     writedata(spi, 0xFF);
 
+    // Power control 13
     writecommand(spi, 0x8F);
     writedata(spi, 0xFF);
 
+    // Display Function Control
     writecommand(spi, 0xB6);
     writedata(spi, 0x00);
-    writedata(spi, 0x20);
-
-    writecommand(spi, GC9A01_COLMOD);
-    writedata(spi, 0x05);
-
-    writecommand(spi, 0x90);
-    writedata(spi, 0x08);
-    writedata(spi, 0x08);
-    writedata(spi, 0x08);
-    writedata(spi, 0x08);
-
-    writecommand(spi, 0xBD);
-    writedata(spi, 0x06);
-
-    writecommand(spi, 0xBC);
     writedata(spi, 0x00);
 
-    writecommand(spi, 0xFF);
-    writedata(spi, 0x60);
-    writedata(spi, 0x01);
-    writedata(spi, 0x04);
-
-    writecommand(spi, 0xC3);
-    writedata(spi, 0x13);
-    writecommand(spi, 0xC4);
-    writedata(spi, 0x13);
-
-    writecommand(spi, 0xC9);
-    writedata(spi, 0x22);
-
-    writecommand(spi, 0xBE);
-    writedata(spi, 0x11);
-
-    writecommand(spi, 0xE1);
-    writedata(spi, 0x10);
-    writedata(spi, 0x0E);
-
-    writecommand(spi, 0xDF);
-    writedata(spi, 0x21);
-    writedata(spi, 0x0c);
-    writedata(spi, 0x02);
-
-    writecommand(spi, 0xF0);
-    writedata(spi, 0x45);
-    writedata(spi, 0x09);
-    writedata(spi, 0x08);
-    writedata(spi, 0x08);
-    writedata(spi, 0x26);
-    writedata(spi, 0x2A);
-
-    writecommand(spi, 0xF1);
-    writedata(spi, 0x43);
-    writedata(spi, 0x70);
-    writedata(spi, 0x72);
-    writedata(spi, 0x36);
-    writedata(spi, 0x37);
-    writedata(spi, 0x6F);
-
-    writecommand(spi, 0xF2);
-    writedata(spi, 0x45);
-    writedata(spi, 0x09);
-    writedata(spi, 0x08);
-    writedata(spi, 0x08);
-    writedata(spi, 0x26);
-    writedata(spi, 0x2A);
-
-    writecommand(spi, 0xF3);
-    writedata(spi, 0x43);
-    writedata(spi, 0x70);
-    writedata(spi, 0x72);
-    writedata(spi, 0x36);
-    writedata(spi, 0x37);
-    writedata(spi, 0x6F);
-
-    writecommand(spi, 0xED);
-    writedata(spi, 0x1B);
-    writedata(spi, 0x0B);
-
-    writecommand(spi, 0xAE);
-    writedata(spi, 0x77);
-
-    writecommand(spi, 0xCD);
-    writedata(spi, 0x63);
-
-    writecommand(spi, 0x70);
-    writedata(spi, 0x07);
-    writedata(spi, 0x07);
-    writedata(spi, 0x04);
-    writedata(spi, 0x0E);
+    // VCOM Control
+    writecommand(spi, 0xC5);
     writedata(spi, 0x0F);
-    writedata(spi, 0x09);
+
+    // Frame rate control
+    writecommand(spi, 0xC6);
+    writedata(spi, 0x13); // 72Hz
+
+    // Positive Voltage Gamma Control
+    writecommand(spi, 0xE0);
+    writedata(spi, 0xD0);
+    writedata(spi, 0x00);
+    writedata(spi, 0x02);
     writedata(spi, 0x07);
-    writedata(spi, 0x08);
-    writedata(spi, 0x03);
+    writedata(spi, 0x0A);
+    writedata(spi, 0x28);
+    writedata(spi, 0x32);
+    writedata(spi, 0x44);
+    writedata(spi, 0x42);
+    writedata(spi, 0x06);
+    writedata(spi, 0x0E);
+    writedata(spi, 0x12);
+    writedata(spi, 0x14);
+    writedata(spi, 0x17);
 
-    writecommand(spi, 0xE8);
-    writedata(spi, 0x34);
-
-    writecommand(spi, 0x98);
-    writedata(spi, 0x3E);
+    // Negative Voltage Gamma Control
+    writecommand(spi, 0xE1);
+    writedata(spi, 0xD0);
+    writedata(spi, 0x00);
+    writedata(spi, 0x02);
     writedata(spi, 0x07);
+    writedata(spi, 0x0A);
+    writedata(spi, 0x28);
+    writedata(spi, 0x31);
+    writedata(spi, 0x54);
+    writedata(spi, 0x47);
+    writedata(spi, 0x0E);
+    writedata(spi, 0x1C);
+    writedata(spi, 0x17);
+    writedata(spi, 0x1B);
+    writedata(spi, 0x1E);
 
+    // Set color mode to 16-bit per pixel (RGB565)
+    writecommand(spi, GC9A01_COLMOD);
+    writedata(spi, 0x55); // 16-bit color
+    ESP_LOGI(TAG, "Color mode set to 16-bit RGB565");
+
+    // Memory access control (determines how frame buffer is written)
     writecommand(spi, GC9A01_MADCTL);
-    writedata(spi, TFT_MAD_COLOR_ORDER);
+    writedata(spi, TFT_MAD_COLOR_ORDER | GC9A01_MADCTL_MX); // Add MX bit for proper orientation
+    ESP_LOGI(TAG, "Memory access control configured");
 
+    // Exit sleep mode
     writecommand(spi, GC9A01_SLPOUT);
-    vTaskDelay(120 / portTICK_PERIOD_MS);
+    ESP_LOGI(TAG, "Exiting sleep mode");
+    delay(120); // Required delay
 
+    // Normal display mode on
+    writecommand(spi, GC9A01_NORON);
+    delay(20);
+
+    // Display inversion on (GC9A01 seems to need this)
+    writecommand(spi, GC9A01_INVON);
+    delay(10);
+
+    // Turn on the display
     writecommand(spi, GC9A01_DISPON);
-    vTaskDelay(20 / portTICK_PERIOD_MS);
+    ESP_LOGI(TAG, "Display turned on");
+    delay(20);
 }
