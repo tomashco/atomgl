@@ -815,7 +815,7 @@ static void display_init_gc9a01(struct SPI *spi)
 
     writecommand(spi, 0xEB);
     writedata(spi, 0x14);
-
+///
     writecommand(spi, 0x84);
     writedata(spi, 0x40);
 
@@ -855,54 +855,192 @@ static void display_init_gc9a01(struct SPI *spi)
     // Display Function Control
     writecommand(spi, 0xB6);
     writedata(spi, 0x00);
-    writedata(spi, 0x20); // Changed: was 0x00
+    writedata(spi, 0x20);
 
-    writecommand(spi, 0x36);
-    writedata(spi, 0x08); // Changed: different orientation setting
 
     writecommand(spi, 0x3A);
     writedata(spi, 0x05); // 16-bit color
 
-    // Positive Voltage Gamma Control
-    writecommand(spi, 0xE0);
-    writedata(spi, 0xD0);
+    writecommand(spi, 0x90);
     writedata(spi, 0x08);
-    writedata(spi, 0x11);
     writedata(spi, 0x08);
-    writedata(spi, 0x0C);
-    writedata(spi, 0x15);
-    writedata(spi, 0x39);
-    writedata(spi, 0x33);
-    writedata(spi, 0x50);
-    writedata(spi, 0x36);
+    writedata(spi, 0x08);
+    writedata(spi, 0x08);
+
+    writecommand(spi, 0xBD);
+    writedata(spi, 0x06);
+
+    writecommand(spi, 0xBC);
+    writedata(spi, 0x00);
+
+    writecommand(spi, 0xFF);
+    writedata(spi, 0x60);
+    writedata(spi, 0x01);
+    writedata(spi, 0x04);
+
+    writecommand(spi, 0xC3);
     writedata(spi, 0x13);
-    writedata(spi, 0x14);
-    writedata(spi, 0x29);
-    writedata(spi, 0x2D);
 
-    // Negative Voltage Gamma Control
+    writecommand(spi, 0xC4);
+    writedata(spi, 0x13);
+
+    writecommand(spi, 0xC9);
+    writedata(spi, 0x22);
+
+    writecommand(spi, 0xBE);
+    writedata(spi, 0x11);
+
     writecommand(spi, 0xE1);
-    writedata(spi, 0xD0);
-    writedata(spi, 0x08);
     writedata(spi, 0x10);
-    writedata(spi, 0x08);
-    writedata(spi, 0x06);
-    writedata(spi, 0x06);
-    writedata(spi, 0x39);
-    writedata(spi, 0x44);
-    writedata(spi, 0x51);
-    writedata(spi, 0x0B);
-    writedata(spi, 0x16);
-    writedata(spi, 0x14);
-    writedata(spi, 0x2F);
-    writedata(spi, 0x31);
+    writedata(spi, 0x0E);
 
-    // Sleep Out
-    writecommand(spi, 0x11);
-    delay(120);
+    writecommand(spi, 0xDF);
+    writedata(spi, 0x21);
+    writedata(spi, 0x0C);
+    writedata(spi, 0x02);
+
+    writecommand(spi, 0xF0);
+    writedata(spi, 0x45);
+    writedata(spi, 0x09);
+    writedata(spi, 0x08);
+    writedata(spi, 0x08);
+    writedata(spi, 0x26);
+    writedata(spi, 0x2A);
+
+    writecommand(spi, 0xF1);
+    writedata(spi, 0x43);
+    writedata(spi, 0x70);
+    writedata(spi, 0x72);
+    writedata(spi, 0x36);
+    writedata(spi, 0x37);
+    writedata(spi, 0x6F);
+
+    writecommand(spi, 0xF2);
+    writedata(spi, 0x45);
+    writedata(spi, 0x09);
+    writedata(spi, 0x08);
+    writedata(spi, 0x08);
+    writedata(spi, 0x26);
+    writedata(spi, 0x2A);
+
+    writecommand(spi, 0xF3);
+    writedata(spi, 0x43);
+    writedata(spi, 0x70);
+    writedata(spi, 0x72);
+    writedata(spi, 0x36);
+    writedata(spi, 0x37);
+    writedata(spi, 0x6F);
+
+    writecommand(spi, 0xED);
+    writedata(spi, 0x1B);
+    writedata(spi, 0x0B);
+
+    writecommand(spi, 0xAE);
+    writedata(spi, 0x77);
+
+    writecommand(spi, 0xCD);
+    writedata(spi, 0x63);
+
+    writecommand(spi, 0x70);
+    writedata(spi, 0x07);
+    writedata(spi, 0x07);
+    writedata(spi, 0x04);
+    writedata(spi, 0x0E);
+    writedata(spi, 0x0F);
+    writedata(spi, 0x09);
+    writedata(spi, 0x07);
+    writedata(spi, 0x08);
+    writedata(spi, 0x03);
+
+    writecommand(spi, 0xE8);
+    writedata(spi, 0x34);
+
+    writecommand(spi, 0x62);
+    writedata(spi, 0x18);
+    writedata(spi, 0x0D);
+    writedata(spi, 0x71);
+    writedata(spi, 0xED);
+    writedata(spi, 0x70);
+    writedata(spi, 0x70);
+    writedata(spi, 0x18);
+    writedata(spi, 0x0F);
+    writedata(spi, 0x71);
+    writedata(spi, 0xEF);
+    writedata(spi, 0x70);
+    writedata(spi, 0x70);
+
+    writecommand(spi, 0x63);
+    writedata(spi, 0x18);
+    writedata(spi, 0x11);
+    writedata(spi, 0x71);
+    writedata(spi, 0xF1);
+    writedata(spi, 0x70);
+    writedata(spi, 0x70);
+    writedata(spi, 0x18);
+    writedata(spi, 0x13);
+    writedata(spi, 0x71);
+    writedata(spi, 0xF3);
+    writedata(spi, 0x70);
+    writedata(spi, 0x70);
+
+    writecommand(spi, 0x64);
+    writedata(spi, 0x28);
+    writedata(spi, 0x29);
+    writedata(spi, 0xF1);
+    writedata(spi, 0x01);
+    writedata(spi, 0xF1);
+    writedata(spi, 0x00);
+    writedata(spi, 0x07);
+
+    writecommand(spi, 0x66);
+    writedata(spi, 0x3C);
+    writedata(spi, 0x00);
+    writedata(spi, 0xCD);
+    writedata(spi, 0x67);
+    writedata(spi, 0x45);
+    writedata(spi, 0x45);
+    writedata(spi, 0x10);
+    writedata(spi, 0x00);
+    writedata(spi, 0x00);
+    writedata(spi, 0x00);
+
+    writecommand(spi, 0x67);
+    writedata(spi, 0x00);
+    writedata(spi, 0x3C);
+    writedata(spi, 0x00);
+    writedata(spi, 0x00);
+    writedata(spi, 0x00);
+    writedata(spi, 0x01);
+    writedata(spi, 0x54);
+    writedata(spi, 0x10);
+    writedata(spi, 0x32);
+    writedata(spi, 0x98);
+
+    writecommand(spi, 0x74);
+    writedata(spi, 0x10);
+    writedata(spi, 0x85);
+    writedata(spi, 0x80);
+    writedata(spi, 0x00);
+    writedata(spi, 0x00);
+    writedata(spi, 0x4E);
+    writedata(spi, 0x00);
+
+    writecommand(spi, 0x98);
+    writedata(spi, 0x3E);
+    writedata(spi, 0x07);
+
+    writecommand(spi, 0x35);
 
     // Display ON
     writecommand(spi, 0x29);
+    delay(120);
+
+    writecommand(spi, GC9A01_SLPOUT);
+    delay(120);
+
+    writecommand(spi, GC9A01_DISPON);
+    delay(120);
+
     delay(20);
 }
 
