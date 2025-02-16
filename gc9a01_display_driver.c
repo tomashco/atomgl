@@ -56,6 +56,7 @@
 
 #define CHAR_WIDTH 8
 
+#define GC9A01_SWRESET 0x01
 #define GC9A01_TFTWIDTH 240
 #define GC9A01_TFTHEIGHT 240
 
@@ -163,7 +164,7 @@ static QueueHandle_t display_messages_queue;
 
 static NativeHandlerResult display_driver_consume_mailbox(Context *ctx);
 static void display_init(Context *ctx, term opts);
-static void display_init_gc9a01(struct SPI *spi);
+static void display_init_std(struct SPI *spi);
 static void draw_test_pattern(struct SPI *spi);
 
 static inline void writedata(struct SPI *spi, uint8_t data)
@@ -654,21 +655,6 @@ static void send_message(term pid, term message, GlobalContext *global)
     globalcontext_send_message(global, local_process_id, message);
 }
 
-static void test_display_with_backlight_config(struct SPI *spi, struct BacklightGPIOConfig *config, const char *test_name)
-{
-    ESP_LOGI(TAG, "=== Starting test: %s ===", test_name);
-    ESP_LOGI(TAG, "Backlight config - GPIO: %d, Active High: %d, Enabled: %d",
-        config->gpio, config->active_high, config->enabled);
-
-    backlight_gpio_init(config);
-    delay(100); // Give some time for backlight to stabilize
-
-    draw_test_pattern(spi);
-
-    ESP_LOGI(TAG, "=== Completed test: %s ===\n", test_name);
-    delay(2000); // Pause between tests
-}
-
 static void display_init(Context *ctx, term opts)
 {
     ESP_LOGI(TAG, "Starting display initialization...");
@@ -722,84 +708,78 @@ static void display_init(Context *ctx, term opts)
     spi_display_init(&spi->spi_disp, &spi_config);
 
     bool ok = display_common_gpio_from_opts(opts, ATOM_STR("\x2", "dc"), &spi->dc_gpio, ctx->global);
-    ok = ok && display_common_gpio_from_opts(opts, ATOM_STR("\x5", "reset"), &spi->reset_gpio, ctx->global);
 
-    if (!ok) {
-        ESP_LOGE(TAG, "Failed init: invalid GPIO configuration");
-        free(spi);
-        return;
+    bool reset_configured = true;
+    if (!display_common_gpio_from_opts(opts, ATOM_STR("\x5", "reset"), &spi->reset_gpio, ctx->global)) {
+        ESP_LOGI(TAG, "Reset GPIO not configured.");
+        reset_configured = false;
     }
+
+    term rotation = interop_kv_get_value_default(opts, ATOM_STR("\x8", "rotation"), term_from_int(0), ctx->global);
+    ok = ok && term_is_integer(rotation);
+    spi->rotation = term_to_int(rotation);
+
+    term invon = interop_kv_get_value_default(opts, ATOM_STR("\x10", "enable_tft_invon"), FALSE_ATOM, ctx->global);
+    ok = ok && ((invon == TRUE_ATOM) || (invon == FALSE_ATOM));
+    bool enable_tft_invon = (invon == TRUE_ATOM);
 
     ESP_LOGI(TAG, "Starting GPIO initialization - DC GPIO: %d, Reset GPIO: %d", spi->dc_gpio, spi->reset_gpio);
 
-    // Reset sequence
-    gpio_set_direction(spi->reset_gpio, GPIO_MODE_OUTPUT);
-    gpio_set_level(spi->reset_gpio, 1);
-    delay(GC9A01_RST_DELAY);
-    gpio_set_level(spi->reset_gpio, 0);
-    delay(GC9A01_RST_DELAY);
-    gpio_set_level(spi->reset_gpio, 1);
-    delay(GC9A01_RST_DELAY);
-    ESP_LOGI(TAG, "Reset sequence completed");
+    if (UNLIKELY(!ok)) {
+        ESP_LOGE(TAG, "Failed init: invalid display parameters.");
+        return;
+    }
+
+    // Reset
+    if (reset_configured) {
+        spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
+        gpio_set_direction(spi->reset_gpio, GPIO_MODE_OUTPUT);
+        gpio_set_level(spi->reset_gpio, 1);
+        vTaskDelay(50 / portTICK_PERIOD_MS);
+        gpio_set_level(spi->reset_gpio, 0);
+        vTaskDelay(50 / portTICK_PERIOD_MS);
+        gpio_set_level(spi->reset_gpio, 1);
+        spi_device_release_bus(spi->spi_disp.handle);
+    }
 
     gpio_set_direction(spi->dc_gpio, GPIO_MODE_OUTPUT);
 
-    // Initialize display
-    ESP_LOGI(TAG, "Starting GC9A01 initialization...");
-    display_init_gc9a01(spi);
-    ESP_LOGI(TAG, "GC9A01 initialization completed");
-
-    // Get the base backlight configuration from options
-    struct BacklightGPIOConfig backlight_config;
-    backlight_gpio_init_config(&backlight_config);
-
-    // Log the received options
-    ESP_LOGI(TAG, "Display options received:");
-    term backlight_pin = interop_kv_get_value_default(opts, ATOM_STR("\x9", "backlight"), term_invalid_term(), ctx->global);
-    if (backlight_pin != term_invalid_term()) {
-        ESP_LOGI(TAG, "Backlight pin configured in options: %d", term_to_int(backlight_pin));
-    } else {
-        ESP_LOGI(TAG, "No backlight pin specified in options");
+    if (!reset_configured) {
+        writecommand(spi, GC9A01_SWRESET);
+        delay(100);
     }
 
-    term backlight_active = interop_kv_get_value_default(opts, ATOM_STR("\xF", "backlight_active"), term_invalid_term(), ctx->global);
-    if (backlight_active != term_invalid_term()) {
-        ESP_LOGI(TAG, "Backlight active mode specified: %s",
-            backlight_active == context_make_atom(ctx, "\x4"
-                                                       "high")
-                ? "high"
-                : "low");
-    } else {
-        ESP_LOGI(TAG, "No backlight_active option specified, defaulting to active high");
+    term init_seq_type_term = interop_kv_get_value_default(opts, ATOM_STR("\xD", "init_seq_type"), term_nil(), ctx->global);
+    int str_ok;
+    char *init_seq_type_string = interop_term_to_string(init_seq_type_term, &str_ok);
+    // if (str_ok && !strcmp(init_seq_type_string, "alt_gamma_2")) {
+    //     display_init_alt_gamma_2(spi);
+    //     free(init_seq_type_string);
+    // } else {
+    display_init_std(spi);
+    // }
+
+    set_rotation(spi, spi->rotation);
+
+    if (enable_tft_invon) {
+        writecommand(spi, GC9A01_INVON);
     }
 
-    term backlight_enabled = interop_kv_get_value_default(opts, ATOM_STR("\x10", "backlight_enabled"), term_invalid_term(), ctx->global);
-    if (backlight_enabled != term_invalid_term()) {
-        ESP_LOGI(TAG, "Backlight enabled setting: %s",
-            backlight_enabled == TRUE_ATOM ? "true" : "false");
-    } else {
-        ESP_LOGI(TAG, "No backlight_enabled option specified, defaulting to enabled");
-    }
+    writecommand(spi, GC9A01_DISPON);
+    delay(120);
 
-    backlight_gpio_parse_config(&backlight_config, opts, ctx->global);
+    // struct BacklightGPIOConfig backlight_config;
+    // backlight_gpio_init_config(&backlight_config);
+    // backlight_gpio_parse_config(&backlight_config, opts, ctx->global);
+    // backlight_gpio_init(&backlight_config);
 
-    // test_display_with_backlight_config(spi, &backlight_config, "Active High, Enabled");
-
-    backlight_gpio_init(&backlight_config);
-    ESP_LOGI(TAG, "Restored original backlight configuration");
-
-    // // Draw test pattern
-    // draw_test_pattern(spi);
-    ESP_LOGI(TAG, "Test pattern drawn");
-
-    ctx->platform_data = spi;
-    spi->ctx = ctx;
-
-    display_messages_queue = xQueueCreate(32, sizeof(Message *));
     xTaskCreate(process_messages, "display", 10000, spi, 1, NULL);
+
+    // draw_test_pattern(spi);
+    // ESP_LOGI(TAG, "Test pattern drawn");
 }
 
-static void display_init_gc9a01(struct SPI *spi)
+static void display_init_std(struct SPI *spi)
 {
     ESP_LOGI(TAG, "Sending GC9A01 initialization commands...");
 
@@ -815,7 +795,7 @@ static void display_init_gc9a01(struct SPI *spi)
 
     writecommand(spi, 0xEB);
     writedata(spi, 0x14);
-///
+    ///
     writecommand(spi, 0x84);
     writedata(spi, 0x40);
 
@@ -856,7 +836,6 @@ static void display_init_gc9a01(struct SPI *spi)
     writecommand(spi, 0xB6);
     writedata(spi, 0x00);
     writedata(spi, 0x20);
-
 
     writecommand(spi, 0x3A);
     writedata(spi, 0x05); // 16-bit color
@@ -1042,11 +1021,13 @@ static void display_init_gc9a01(struct SPI *spi)
     delay(120);
 
     delay(20);
+
+    ESP_LOGI(TAG, "GC9A01 initialization completed");
 }
 
 static void draw_test_pattern(struct SPI *spi)
 {
-    ESP_LOGI(TAG, "Drawing test pattern - random pixels");
+    ESP_LOGI(TAG, "Drawing test pattern - all white pixels");
 
     set_screen_paint_area(spi, 0, 0, GC9A01_TFTWIDTH, GC9A01_TFTHEIGHT);
     writecommand(spi, GC9A01_RAMWR);
@@ -1060,30 +1041,27 @@ static void draw_test_pattern(struct SPI *spi)
 
     spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
 
-    // Draw random colored pixels one by one
+    // White in RGB565 format is 0xFFFF
+    uint16_t red = 0xFF0000;
+    pixel[0] = SPI_SWAP_DATA_TX(red, 16);
+
+    // Draw white pixels one by one
     for (int y = 0; y < GC9A01_TFTHEIGHT; y++) {
         for (int x = 0; x < GC9A01_TFTWIDTH; x++) {
-            // Generate random RGB565 color
-            uint16_t color = (rand() & 0xF800) | // Random red
-                (rand() & 0x07E0) | // Random green
-                (rand() & 0x001F); // Random blue
-
-            pixel[0] = SPI_SWAP_DATA_TX(color, 16);
-
-            // Write single pixel
+            // Write single white pixel
             spi_display_dmawrite(&spi->spi_disp, sizeof(uint16_t), pixel);
 
-            // Small delay between pixels (1ms)
+            // Small delay between pixels (5ms)
             delay(5);
 
             if ((x % 20) == 0 && (y % 20) == 0) {
-                ESP_LOGI(TAG, "Drawing pixel at %d,%d with color 0x%04X", x, y, color);
+                ESP_LOGI(TAG, "Drawing Red pixel at %d,%d", x, y);
             }
         }
     }
 
-    spi_device_release_bus(spi->spi_disp.handle);
+    // spi_device_release_bus(spi->spi_disp.handle);
     free(pixel);
 
-    ESP_LOGI(TAG, "Test pattern completed");
+    ESP_LOGI(TAG, "Red test pattern completed");
 }
