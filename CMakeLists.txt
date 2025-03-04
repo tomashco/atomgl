@@ -35,7 +35,6 @@ idf_component_register(SRCS
     "ssd1306_display_driver.c"
     "st7789_display_driver.c"
     "gc9a01_display_driver.c"
-    "gc9a01_esp_lcd.c"
     "spi_display.c"
     "backlight_gpio.c"
     PRIV_REQUIRES "libatomvm" "avm_sys" "avm_builtins" "driver" "sdmmc" "vfs" "fatfs"

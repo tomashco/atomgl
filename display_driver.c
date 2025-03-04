@@ -35,7 +35,6 @@ Context *memory_lcd_display_create_port(GlobalContext *global, term opts);
 Context *ssd1306_display_create_port(GlobalContext *global, term opts);
 Context *st7789_display_create_port(GlobalContext *global, term opts);
 Context *gc9a01_display_create_port(GlobalContext *global, term opts);
-Context *gc9a01_esp_lcd_display_create_port(GlobalContext *global, term opts);
 
 Context *display_create_port(GlobalContext *global, term opts)
 {
@@ -71,8 +70,6 @@ Context *display_create_port(GlobalContext *global, term opts)
         ctx = st7789_display_create_port(global, opts);
     } else if (!strcmp(compat_string, "galaxycore,gc9a01")) {
         ctx = gc9a01_display_create_port(global, opts);
-    } else if (!strcmp(compat_string, "galaxycore,gc9a01-esp-lcd")) {
-        ctx = gc9a01_esp_lcd_display_create_port(global, opts);
     } else {
         ESP_LOGE(TAG, "No matching display driver for given `comptaible`: `%s`.", compat_string);
     }
