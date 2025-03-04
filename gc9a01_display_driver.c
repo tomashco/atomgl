@@ -51,7 +51,7 @@
 #include "spi_display.h"
 
 // if needed it can be lowered to 27000000
-#define SPI_CLOCK_HZ 27000000
+#define SPI_CLOCK_HZ 40000000
 #define SPI_MODE 0
 
 #define CHAR_WIDTH 8
@@ -65,13 +65,13 @@
 #define GC9A01_NORON 0x13
 #define GC9A01_INVOFF 0x20
 #define GC9A01_INVON 0x21
-#define GC9A01_DISPOFF 0x28
-#define GC9A01_DISPON 0x29
-#define GC9A01_CASET 0x2A
-#define GC9A01_RASET 0x2B
-#define GC9A01_RAMWR 0x2C
-#define GC9A01_MADCTL 0x36
-#define GC9A01_COLMOD 0x3A
+#define LCD_CMD_DISPOFF      0x28 // Display off (disable frame buffer output)
+#define LCD_CMD_DISPON       0x29 // Display on (enable frame buffer output)
+#define GC9A01_CASET 0x2A // Column Address Set
+#define GC9A01_RASET 0x2B // Row Address Set
+#define GC9A01_RAMWR 0x2C // Memory Write
+#define GC9A01_MADCTL 0x36 // Memory Access Control
+#define GC9A01_COLMOD 0x3A // Color Mode => RGB565
 
 // rotation
 #define GC9A01_MADCTL_MY 0x80
@@ -169,7 +169,7 @@ static void draw_test_pattern(struct SPI *spi);
 
 static inline void writedata(struct SPI *spi, uint8_t data)
 {
-    ESP_LOGD(TAG, "Writing data: 0x%02X", data);
+    fprintf(stderr, "Writing data: 0x%02X\n", data);
     spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
     spi_display_write(&spi->spi_disp, 8, data);
     spi_device_release_bus(spi->spi_disp.handle);
@@ -177,7 +177,7 @@ static inline void writedata(struct SPI *spi, uint8_t data)
 
 static inline void writecommand(struct SPI *spi, uint8_t command)
 {
-    ESP_LOGD(TAG, "Writing command: 0x%02X", command);
+    fprintf(stderr, "Writing command: 0x%02X\n", command);
     gpio_set_level(spi->dc_gpio, 0);
     writedata(spi, command);
     gpio_set_level(spi->dc_gpio, 1);
@@ -620,25 +620,33 @@ static NativeHandlerResult display_driver_consume_mailbox(Context *ctx)
 
 static void set_rotation(struct SPI *spi, int rotation)
 {
-    uint8_t madctl = TFT_MAD_COLOR_ORDER;
+    // uint8_t madctl = TFT_MAD_COLOR_ORDER;
 
-    switch (rotation) {
-        case 3:
-            madctl |= GC9A01_MADCTL_MX | GC9A01_MADCTL_MY | GC9A01_MADCTL_MV;
-            break;
-        case 2:
-            madctl |= GC9A01_MADCTL_MX | GC9A01_MADCTL_MY;
-            break;
-        case 1:
-            madctl |= GC9A01_MADCTL_MV;
-            break;
-        case 0:
-        default:
-            break;
-    }
+    // switch (rotation) {
+    //     case 3:
+    //         madctl |= GC9A01_MADCTL_MX | GC9A01_MADCTL_MY | GC9A01_MADCTL_MV;
+    //         break;
+    //     case 2:
+    //         madctl |= GC9A01_MADCTL_MX | GC9A01_MADCTL_MY;
+    //         break;
+    //     case 1:
+    //         madctl |= GC9A01_MADCTL_MV;
+    //         break;
+    //     case 0:
+    //     default:
+    //         break;
+    // }
 
+    // The reference implementation uses rotation 0 with MADCTL value 0x48
+    // This corresponds to:
+    // - MX bit (0x40) = 1 : Column address order reversed
+    // - MH bit (0x08) = 1 : Display data latch order reversed
+    
     writecommand(spi, GC9A01_MADCTL);
-    writedata(spi, madctl);
+    //     writedata(spi, madctl);
+    writedata(spi, 0x48);  // Fixed value used by the reference implementation
+    
+    ESP_LOGI(TAG, "Set display rotation to reference implementation default (0x48)");
 }
 
 Context *gc9a01_display_create_port(GlobalContext *global, term opts)
@@ -705,6 +713,8 @@ static void display_init(Context *ctx, term opts)
         spi_config.clock_speed_hz,
         spi_config.cs_gpio);
 
+
+
     spi_display_init(&spi->spi_disp, &spi_config);
 
     bool ok = display_common_gpio_from_opts(opts, ATOM_STR("\x2", "dc"), &spi->dc_gpio, ctx->global);
@@ -732,15 +742,26 @@ static void display_init(Context *ctx, term opts)
 
     // Reset
     if (reset_configured) {
+        ESP_LOGE(TAG, "Resetting display at pin %d...", spi->reset_gpio);
         spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
         gpio_set_direction(spi->reset_gpio, GPIO_MODE_OUTPUT);
         gpio_set_level(spi->reset_gpio, 1);
-        vTaskDelay(50 / portTICK_PERIOD_MS);
+        delay(200);
         gpio_set_level(spi->reset_gpio, 0);
-        vTaskDelay(50 / portTICK_PERIOD_MS);
+        delay(200);
         gpio_set_level(spi->reset_gpio, 1);
+        delay(200);
         spi_device_release_bus(spi->spi_disp.handle);
     }
+
+        writecommand(spi, GC9A01_SLPOUT);
+    delay(100);
+    writecommand(spi, GC9A01_MADCTL);
+    writedata(spi, 0x08);
+    writecommand(spi, GC9A01_COLMOD);
+    writedata(spi, 0x55);
+
+    
 
     gpio_set_direction(spi->dc_gpio, GPIO_MODE_OUTPUT);
 
@@ -765,13 +786,15 @@ static void display_init(Context *ctx, term opts)
         writecommand(spi, GC9A01_INVON);
     }
 
-    writecommand(spi, GC9A01_DISPON);
-    delay(120);
+    // writecommand(spi, GC9A01_DISPON);
+    // delay(120);
 
-    // struct BacklightGPIOConfig backlight_config;
-    // backlight_gpio_init_config(&backlight_config);
-    // backlight_gpio_parse_config(&backlight_config, opts, ctx->global);
-    // backlight_gpio_init(&backlight_config);
+    // writecommand(spi, GC9A01_SLPOUT);
+    // delay(120);
+    struct BacklightGPIOConfig backlight_config;
+    backlight_gpio_init_config(&backlight_config);
+    backlight_gpio_parse_config(&backlight_config, opts, ctx->global);
+    backlight_gpio_init(&backlight_config);
 
     xTaskCreate(process_messages, "display", 10000, spi, 1, NULL);
 
@@ -782,22 +805,22 @@ static void display_init(Context *ctx, term opts)
 static void display_init_std(struct SPI *spi)
 {
     ESP_LOGI(TAG, "Sending GC9A01 initialization commands...");
-
+    
     // Initial delay after reset
     delay(120);
 
-    writecommand(spi, 0xEF);
+    writecommand(spi, 0xFE); // Inter Register Enable1
+    writecommand(spi, 0xEF); // Inter Register Enable2
+
     writecommand(spi, 0xEB);
     writedata(spi, 0x14);
 
-    writecommand(spi, 0xFE);
-    writecommand(spi, 0xEF);
 
     writecommand(spi, 0xEB);
     writedata(spi, 0x14);
     ///
     writecommand(spi, 0x84);
-    writedata(spi, 0x40);
+    writedata(spi, 0x60);
 
     writecommand(spi, 0x85);
     writedata(spi, 0xFF);
@@ -807,12 +830,18 @@ static void display_init_std(struct SPI *spi)
 
     writecommand(spi, 0x87);
     writedata(spi, 0xFF);
+    
+    writecommand(spi, 0x8e);
+    writedata(spi, 0xFF);
+
+    writecommand(spi, 0x8f);
+    writedata(spi, 0xFF);
 
     writecommand(spi, 0x88);
     writedata(spi, 0x0A);
 
     writecommand(spi, 0x89);
-    writedata(spi, 0x21);
+    writedata(spi, 0x23);    
 
     writecommand(spi, 0x8A);
     writedata(spi, 0x00);
@@ -824,21 +853,7 @@ static void display_init_std(struct SPI *spi)
     writedata(spi, 0x01);
 
     writecommand(spi, 0x8D);
-    writedata(spi, 0x01);
-
-    writecommand(spi, 0x8E);
-    writedata(spi, 0xFF);
-
-    writecommand(spi, 0x8F);
-    writedata(spi, 0xFF);
-
-    // Display Function Control
-    writecommand(spi, 0xB6);
-    writedata(spi, 0x00);
-    writedata(spi, 0x20);
-
-    writecommand(spi, 0x3A);
-    writedata(spi, 0x05); // 16-bit color
+    writedata(spi, 0x03);
 
     writecommand(spi, 0x90);
     writedata(spi, 0x08);
@@ -846,25 +861,19 @@ static void display_init_std(struct SPI *spi)
     writedata(spi, 0x08);
     writedata(spi, 0x08);
 
-    writecommand(spi, 0xBD);
-    writedata(spi, 0x06);
-
-    writecommand(spi, 0xBC);
-    writedata(spi, 0x00);
-
     writecommand(spi, 0xFF);
     writedata(spi, 0x60);
     writedata(spi, 0x01);
     writedata(spi, 0x04);
 
-    writecommand(spi, 0xC3);
+    writecommand(spi, 0xC3); // Power Control 2
     writedata(spi, 0x13);
 
-    writecommand(spi, 0xC4);
+    writecommand(spi, 0xC4); // Power Control 3
     writedata(spi, 0x13);
 
-    writecommand(spi, 0xC9);
-    writedata(spi, 0x22);
+    writecommand(spi, 0xC9); // Power Control 4
+    writedata(spi, 0x30);
 
     writecommand(spi, 0xBE);
     writedata(spi, 0x11);
@@ -878,7 +887,7 @@ static void display_init_std(struct SPI *spi)
     writedata(spi, 0x0C);
     writedata(spi, 0x02);
 
-    writecommand(spi, 0xF0);
+    writecommand(spi, 0xF0); // SET_GAMMA1
     writedata(spi, 0x45);
     writedata(spi, 0x09);
     writedata(spi, 0x08);
@@ -886,7 +895,7 @@ static void display_init_std(struct SPI *spi)
     writedata(spi, 0x26);
     writedata(spi, 0x2A);
 
-    writecommand(spi, 0xF1);
+    writecommand(spi, 0xF1); // SET_GAMMA2
     writedata(spi, 0x43);
     writedata(spi, 0x70);
     writedata(spi, 0x72);
@@ -894,7 +903,7 @@ static void display_init_std(struct SPI *spi)
     writedata(spi, 0x37);
     writedata(spi, 0x6F);
 
-    writecommand(spi, 0xF2);
+    writecommand(spi, 0xF2); // SET_GAMMA3
     writedata(spi, 0x45);
     writedata(spi, 0x09);
     writedata(spi, 0x08);
@@ -902,7 +911,7 @@ static void display_init_std(struct SPI *spi)
     writedata(spi, 0x26);
     writedata(spi, 0x2A);
 
-    writecommand(spi, 0xF3);
+    writecommand(spi, 0xF3); // SET_GAMMA4
     writedata(spi, 0x43);
     writedata(spi, 0x70);
     writedata(spi, 0x72);
@@ -934,14 +943,35 @@ static void display_init_std(struct SPI *spi)
     writecommand(spi, 0xE8);
     writedata(spi, 0x34);
 
+writecommand(spi, 0x60);
+    writedata(spi, 0x38);
+    writedata(spi, 0x0B);
+    writedata(spi, 0x6D);
+    writedata(spi, 0x6D);
+    writedata(spi, 0x39);
+    writedata(spi, 0xF0);
+    writedata(spi, 0x6D);
+    writedata(spi, 0x6D);
+
+    writecommand(spi, 0x61);
+    writedata(spi, 0x38);
+    writedata(spi, 0xF4);
+    writedata(spi, 0x6D);
+    writedata(spi, 0x6D);
+    writedata(spi, 0x38);
+    writedata(spi, 0xF7);
+    writedata(spi, 0x6D);
+    writedata(spi, 0x6D);
+
+
     writecommand(spi, 0x62);
-    writedata(spi, 0x18);
+    writedata(spi, 0x38);
     writedata(spi, 0x0D);
     writedata(spi, 0x71);
     writedata(spi, 0xED);
     writedata(spi, 0x70);
     writedata(spi, 0x70);
-    writedata(spi, 0x18);
+    writedata(spi, 0x38);
     writedata(spi, 0x0F);
     writedata(spi, 0x71);
     writedata(spi, 0xEF);
@@ -949,13 +979,13 @@ static void display_init_std(struct SPI *spi)
     writedata(spi, 0x70);
 
     writecommand(spi, 0x63);
-    writedata(spi, 0x18);
+    writedata(spi, 0x38);
     writedata(spi, 0x11);
     writedata(spi, 0x71);
     writedata(spi, 0xF1);
     writedata(spi, 0x70);
     writedata(spi, 0x70);
-    writedata(spi, 0x18);
+    writedata(spi, 0x38);
     writedata(spi, 0x13);
     writedata(spi, 0x71);
     writedata(spi, 0xF3);
@@ -997,7 +1027,7 @@ static void display_init_std(struct SPI *spi)
 
     writecommand(spi, 0x74);
     writedata(spi, 0x10);
-    writedata(spi, 0x85);
+    writedata(spi, 0x45);
     writedata(spi, 0x80);
     writedata(spi, 0x00);
     writedata(spi, 0x00);
@@ -1008,60 +1038,71 @@ static void display_init_std(struct SPI *spi)
     writedata(spi, 0x3E);
     writedata(spi, 0x07);
 
-    writecommand(spi, 0x35);
+    writecommand(spi, 0x99);
+    writedata(spi, 0x3E);
+    writedata(spi, 0x07);
 
-    // Display ON
-    writecommand(spi, 0x29);
+
+    writecommand(spi, LCD_CMD_DISPON);  // Display ON
+    ESP_LOGI(TAG, "Display ON");
+
     delay(120);
-
-    writecommand(spi, GC9A01_SLPOUT);
-    delay(120);
-
-    writecommand(spi, GC9A01_DISPON);
-    delay(120);
-
-    delay(20);
 
     ESP_LOGI(TAG, "GC9A01 initialization completed");
 }
 
 static void draw_test_pattern(struct SPI *spi)
 {
-    ESP_LOGI(TAG, "Drawing test pattern - all white pixels");
+    ESP_LOGI(TAG, "Drawing test pattern - 5 colored rectangles");
 
-    set_screen_paint_area(spi, 0, 0, GC9A01_TFTWIDTH, GC9A01_TFTHEIGHT);
-    writecommand(spi, GC9A01_RAMWR);
+    // Define rectangle dimensions
+    const int rect_width = 40;
+    const int rect_height = 40;
+    const int spacing = 10;
+    const int start_x = 20;
+    const int start_y = 100;
 
-    // Create a buffer for one pixel
-    uint16_t *pixel = heap_caps_malloc(sizeof(uint16_t), MALLOC_CAP_DMA);
-    if (!pixel) {
+    // Define 5 colors in RGB565 format
+    const uint16_t colors[] = {
+        0xF800,  // Red (0b1111100000000000)
+        0x07E0,  // Green (0b0000011111100000)
+        0x001F,  // Blue (0b0000000000011111)
+        0xFFE0,  // Yellow (0b1111111111100000)
+        0x780F   // Purple (0b0111100000001111)
+    };
+
+    // Allocate buffer for one line of pixels
+    uint16_t *line_buffer = heap_caps_malloc(rect_width * sizeof(uint16_t), MALLOC_CAP_DMA);
+    if (!line_buffer) {
         ESP_LOGE(TAG, "Failed to allocate test pattern buffer");
         return;
     }
 
-    spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
-
-    // White in RGB565 format is 0xFFFF
-    uint16_t red = 0xFF0000;
-    pixel[0] = SPI_SWAP_DATA_TX(red, 16);
-
-    // Draw white pixels one by one
-    for (int y = 0; y < GC9A01_TFTHEIGHT; y++) {
-        for (int x = 0; x < GC9A01_TFTWIDTH; x++) {
-            // Write single white pixel
-            spi_display_dmawrite(&spi->spi_disp, sizeof(uint16_t), pixel);
-
-            // Small delay between pixels (5ms)
-            delay(5);
-
-            if ((x % 20) == 0 && (y % 20) == 0) {
-                ESP_LOGI(TAG, "Drawing Red pixel at %d,%d", x, y);
-            }
+    // Draw each rectangle
+    for (int rect = 0; rect < 5; rect++) {
+        int x = start_x + (rect_width + spacing) * rect;
+        
+        // Fill line buffer with current color
+        uint16_t color = SPI_SWAP_DATA_TX(colors[rect], 16);
+        for (int i = 0; i < rect_width; i++) {
+            line_buffer[i] = color;
         }
+
+        // Set drawing area for current rectangle
+        set_screen_paint_area(spi, x, start_y, rect_width, rect_height);
+        writecommand(spi, GC9A01_RAMWR);
+
+        // Draw the rectangle line by line
+        spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
+        for (int y = 0; y < rect_height; y++) {
+            spi_display_dmawrite(&spi->spi_disp, rect_width * sizeof(uint16_t), line_buffer);
+        }
+        spi_device_release_bus(spi->spi_disp.handle);
+
+        ESP_LOGI(TAG, "Drew rectangle %d at x=%d y=%d", rect + 1, x, start_y);
+        delay(1000);
     }
 
-    // spi_device_release_bus(spi->spi_disp.handle);
-    free(pixel);
-
-    ESP_LOGI(TAG, "Red test pattern completed");
+    free(line_buffer);
+    ESP_LOGI(TAG, "Test pattern completed");
 }
