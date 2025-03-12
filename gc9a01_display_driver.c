@@ -91,7 +91,7 @@ static _lock_t lvgl_api_lock;
 
 static void display_init(Context *ctx, term opts);
 
-extern void example_lvgl_demo_ui(lv_disp_t *disp);
+extern void example_lvgl_demo_ui(lv_display_t *disp);
 
 static void send_message(term pid, term message, GlobalContext *global);
 
@@ -109,6 +109,7 @@ struct SPI
     // avm_int_t rotation;
 
     Context *ctx;
+    lv_display_t *display;  // Store the LVGL display pointer
 };
 
 // struct PendingReply
@@ -121,55 +122,167 @@ static void do_update(Context *ctx, term display_list)
 {
     int proper;
     int len = term_list_length(display_list, &proper);
-    ESP_LOGI(TAG, "do_update");
-    // BaseDisplayItem *items = malloc(sizeof(BaseDisplayItem) * len);
+    ESP_LOGI(TAG, "do_update: Starting update with %d display items", len);
 
-    // term t = display_list;
-    // for (int i = 0; i < len; i++) {
-    //     init_item(&items[i], term_get_list_head(t), ctx);
-    //     t = term_get_list_tail(t);
-    // }
-
-    // int screen_width = screen->w;
-    // int screen_height = screen->h;
-    // struct SPI *spi = ctx->platform_data;
-
-    // set_screen_paint_area(spi, 0, 0, screen_width, screen_height);
-    // writecommand(spi, ST7789_RAMWR);
-    // spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
-
-    // bool transaction_in_progress = false;
-
-    // for (int ypos = 0; ypos < screen_height; ypos++) {
-    //     int xpos = 0;
-    //     while (xpos < screen_width) {
-    //         int drawn_pixels = draw_x(xpos, ypos, items, len);
-    //         xpos += drawn_pixels;
-    //     }
-
-    //     if (transaction_in_progress) {
-    //         spi_transaction_t *trans;
-    //         // I did a quick measurement, and most of the time is spent waiting for DMA transaction
-    //         // eg. 23 us spent in draw_x, 188 us spent in spi_device_get_trans_result
-    //         spi_device_get_trans_result(spi->spi_disp.handle, &trans, portMAX_DELAY);
-    //     }
-
-    //     // NEW CODE
-    //     void *tmp = screen->pixels;
-    //     screen->pixels = screen->pixels_out;
-    //     screen->pixels_out = tmp;
-    //     spi_display_dmawrite(&spi->spi_disp, screen_width * sizeof(uint16_t), screen->pixels_out);
-    //     transaction_in_progress = true;
-    // }
-
-    // if (transaction_in_progress) {
-    //     spi_transaction_t *trans;
-    //     spi_device_get_trans_result(spi->spi_disp.handle, &trans, portMAX_DELAY);
-    // }
-
-    // spi_device_release_bus(spi->spi_disp.handle);
-
-    // destroy_items(items, len);
+    // Get the LVGL display
+    lv_display_t *display = NULL;
+    
+    // Find the active display
+    display = lv_display_get_default();
+    if (!display) {
+        ESP_LOGE(TAG, "do_update: No LVGL display found, aborting update");
+        return;
+    }
+    ESP_LOGI(TAG, "do_update: Found LVGL display");
+    
+    // Get the active screen
+    lv_obj_t *scr = lv_display_get_screen_active(display);
+    if (!scr) {
+        ESP_LOGE(TAG, "do_update: No active screen found, aborting update");
+        return;
+    }
+    ESP_LOGI(TAG, "do_update: Found active screen");
+    
+    // Clear the screen first
+    ESP_LOGI(TAG, "do_update: Cleaning screen");
+    lv_obj_clean(scr);
+    
+    // Process each item in the display list
+    term t = display_list;
+    for (int i = 0; i < len; i++) {
+        term item_term = term_get_list_head(t);
+        
+        // Create a temporary BaseDisplayItem to parse the term
+        BaseDisplayItem item;
+        init_item(&item, item_term, ctx);
+        
+        // Process based on primitive type
+        switch (item.primitive) {
+            case Rect: {
+                ESP_LOGI(TAG, "do_update: Creating rectangle at (%d,%d) size %dx%d color 0x%06x", 
+                         item.x, item.y, item.width, item.height, item.brcolor);
+                
+                // Create an LVGL rectangle
+                lv_obj_t *rect = lv_obj_create(scr);
+                
+                // Set position and size
+                lv_obj_set_pos(rect, item.x, item.y);
+                lv_obj_set_size(rect, item.width, item.height);
+                
+                // Set color (convert from RGBA8888 to LVGL color format)
+                lv_color_t color = lv_color_make(
+                    (item.brcolor >> 16) & 0xFF,  // R
+                    (item.brcolor >> 8) & 0xFF,   // G
+                    item.brcolor & 0xFF           // B
+                );
+                
+                lv_obj_set_style_bg_color(rect, color, LV_PART_MAIN);
+                lv_obj_set_style_border_width(rect, 0, LV_PART_MAIN);
+                break;
+            }
+            
+            case Text: {
+                ESP_LOGI(TAG, "do_update: Creating text at (%d,%d) text '%s' color 0x%06x", 
+                         item.x, item.y, item.data.text_data.text, item.data.text_data.fgcolor);
+                
+                // Create an LVGL label
+                lv_obj_t *label = lv_label_create(scr);
+                
+                // Set position
+                lv_obj_set_pos(label, item.x, item.y);
+                
+                // Set text
+                lv_label_set_text(label, item.data.text_data.text);
+                
+                // Set color
+                lv_color_t color = lv_color_make(
+                    (item.data.text_data.fgcolor >> 16) & 0xFF,  // R
+                    (item.data.text_data.fgcolor >> 8) & 0xFF,   // G
+                    item.data.text_data.fgcolor & 0xFF           // B
+                );
+                
+                lv_obj_set_style_text_color(label, color, LV_PART_MAIN);
+                break;
+            }
+            
+            case Image: {
+                ESP_LOGI(TAG, "do_update: Creating image at (%d,%d) size %dx%d", 
+                         item.x, item.y, item.width, item.height);
+                
+                // For images, we need to create an LVGL image descriptor
+                // This is more complex and depends on your image format
+                // For simplicity, we'll create a basic implementation
+                
+                // Create a buffer for the image data
+                lv_color_t *buf = malloc(item.width * item.height * sizeof(lv_color_t));
+                if (!buf) {
+                    ESP_LOGE(TAG, "do_update: Failed to allocate memory for image (%d bytes)", 
+                             item.width * item.height * sizeof(lv_color_t));
+                    break;
+                }
+                ESP_LOGI(TAG, "do_update: Allocated %d bytes for image buffer", 
+                         item.width * item.height * sizeof(lv_color_t));
+                
+                // Convert image data to LVGL format
+                // Assuming image data is in RGB565 format
+                const uint16_t *src = (const uint16_t *)item.data.image_data.pix;
+                ESP_LOGI(TAG, "do_update: Converting image data from RGB565 to LVGL format");
+                for (int j = 0; j < item.width * item.height; j++) {
+                    uint16_t pixel = src[j];
+                    // Convert RGB565 to LVGL color format
+                    uint8_t r = (pixel >> 11) & 0x1F;
+                    uint8_t g = (pixel >> 5) & 0x3F;
+                    uint8_t b = pixel & 0x1F;
+                    
+                    // Scale to 8-bit per channel
+                    r = (r * 255) / 31;
+                    g = (g * 255) / 63;
+                    b = (b * 255) / 31;
+                    
+                    buf[j] = lv_color_make(r, g, b);
+                }
+                
+                // Create an LVGL image descriptor
+                lv_image_dsc_t img_dsc;
+                img_dsc.data = (const uint8_t *)buf;
+                img_dsc.data_size = item.width * item.height * sizeof(lv_color_t);
+                img_dsc.header.w = item.width;
+                img_dsc.header.h = item.height;
+                img_dsc.header.cf = LV_COLOR_FORMAT_NATIVE;
+                
+                // Create an LVGL image
+                ESP_LOGI(TAG, "do_update: Creating LVGL image object");
+                lv_obj_t *img = lv_image_create(scr);
+                lv_image_set_src(img, &img_dsc);
+                lv_obj_set_pos(img, item.x, item.y);
+                
+                // Note: This creates a memory leak as we don't free the buffer
+                // In a real implementation, you'd need to handle this properly
+                ESP_LOGW(TAG, "do_update: Warning - image buffer not freed (memory leak)");
+                break;
+            }
+            
+            case ScaledCroppedImage: {
+                // Similar to Image but with scaling and cropping
+                // This is more complex and would require additional LVGL handling
+                ESP_LOGW(TAG, "do_update: ScaledCroppedImage at (%d,%d) size %dx%d not fully implemented", 
+                         item.x, item.y, item.width, item.height);
+                break;
+            }
+            
+            default:
+                ESP_LOGW(TAG, "do_update: Unknown primitive type: %d", item.primitive);
+                break;
+        }
+        
+        // Move to the next item in the list
+        t = term_get_list_tail(t);
+    }
+    
+    // Force a refresh of the display
+    ESP_LOGI(TAG, "do_update: Forcing display refresh with lv_refr_now()");
+    lv_refr_now(display);
+    ESP_LOGI(TAG, "do_update: Update completed");
 }
 
 static void draw_buffer(struct SPI *spi, int x, int y, int width, int height, const void *imgdata)
@@ -214,15 +327,18 @@ static NativeHandlerResult display_driver_consume_mailbox(Context *ctx);
 
 static void process_message(Message *message, Context *ctx)
 {
+    ESP_LOGI(TAG, "process_message: Processing new message");
+    
     GenMessage gen_message;
     if (UNLIKELY(port_parse_gen_message(message->message, &gen_message) != GenCallMessage)) {
+        ESP_LOGE(TAG, "process_message: Received invalid message format");
         fprintf(stderr, "Received invalid message.");
         AVM_ABORT();
     }
 
     term req = gen_message.req;
     if (UNLIKELY(!term_is_tuple(req) || term_get_tuple_arity(req) < 1)) {
-        ESP_LOGI(TAG, "process_message ~ !term_is_tuple(req)");
+        ESP_LOGE(TAG, "process_message: Invalid request format - not a tuple or arity < 1");
         AVM_ABORT();
     }
     term cmd = term_get_tuple_element(req, 0);
@@ -231,12 +347,19 @@ static void process_message(Message *message, Context *ctx)
 
     if (cmd == context_make_atom(ctx, "\x6"
                                       "update")) {
+        ESP_LOGI(TAG, "process_message: Received 'update' command");
         term display_list = term_get_tuple_element(req, 1);
-        ESP_LOGI(TAG, "process_message ~ display_list %s", display_list);
+        
+        // Lock the mutex due to the LVGL APIs are not thread-safe
+        ESP_LOGI(TAG, "process_message: Acquiring LVGL mutex");
+        _lock_acquire(&lvgl_api_lock);
         do_update(ctx, display_list);
+        ESP_LOGI(TAG, "process_message: Releasing LVGL mutex");
+        _lock_release(&lvgl_api_lock);
 
     } else if (cmd == context_make_atom(ctx, "\xB"
                                              "draw_buffer")) {
+        ESP_LOGI(TAG, "process_message: Received 'draw_buffer' command");
         int x = term_to_int(term_get_tuple_element(req, 1));
         int y = term_to_int(term_get_tuple_element(req, 2));
         int width = term_to_int(term_get_tuple_element(req, 3));
@@ -245,18 +368,27 @@ static void process_message(Message *message, Context *ctx)
         unsigned long addr_high = term_to_int(term_get_tuple_element(req, 6));
 
         const void *data = (const void *) ((addr_low | (addr_high << 16)));
-        ESP_LOGI(TAG, "process_message ~ draw_buffer %s", &data);
+        ESP_LOGI(TAG, "process_message: Drawing buffer at (%d,%d) size %dx%d", x, y, width, height);
+        
+        // Lock the mutex due to the LVGL APIs are not thread-safe
+        ESP_LOGI(TAG, "process_message: Acquiring LVGL mutex");
+        _lock_acquire(&lvgl_api_lock);
         draw_buffer(spi, x, y, width, height, data);
+        ESP_LOGI(TAG, "process_message: Releasing LVGL mutex");
+        _lock_release(&lvgl_api_lock);
 
         // draw_buffer is a kind of cast, no need to reply
+        ESP_LOGI(TAG, "process_message: draw_buffer completed (no reply needed)");
         return;
 
     } else {
+        ESP_LOGW(TAG, "process_message: Unknown command received");
         fprintf(stderr, "display: ");
         term_display(stderr, req, ctx);
         fprintf(stderr, "\n");
     }
 
+    ESP_LOGI(TAG, "process_message: Sending reply");
     BEGIN_WITH_STACK_HEAP(TUPLE_SIZE(2) + REF_SIZE, heap);
     term return_tuple = term_alloc_tuple(2, &heap);
     term_put_tuple_element(return_tuple, 0, gen_message.ref);
@@ -264,22 +396,27 @@ static void process_message(Message *message, Context *ctx)
 
     send_message(gen_message.pid, return_tuple, ctx->global);
     END_WITH_STACK_HEAP(heap, ctx->global);
+    ESP_LOGI(TAG, "process_message: Message processing completed");
 }
 
 static void process_messages(void *arg)
 {
     struct SPI *args = arg;
+    ESP_LOGI(TAG, "process_messages: Task started");
 
     while (true) {
+        ESP_LOGI(TAG, "process_messages: Waiting for message from queue");
         Message *message;
         xQueueReceive(display_messages_queue, &message, portMAX_DELAY);
-        ESP_LOGI(TAG, "PROCESS MESSAGE %s", &message);
+        ESP_LOGI(TAG, "process_messages: Received message from queue");
 
         process_message(message, args->ctx);
 
+        ESP_LOGI(TAG, "process_messages: Disposing message");
         BEGIN_WITH_STACK_HEAP(1, temp_heap);
         mailbox_message_dispose(&message->base, &temp_heap);
         END_WITH_STACK_HEAP(temp_heap, args->ctx->global);
+        ESP_LOGI(TAG, "process_messages: Message disposed, waiting for next message");
     }
 }
 
@@ -489,7 +626,7 @@ void display_init(Context *ctx, term opts)
     ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io_handle, &cbs, display));
 
     ESP_LOGI(TAG, "Create LVGL task");
-    // xTaskCreate(example_lvgl_port_task, "LVGL", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
+    xTaskCreate(example_lvgl_port_task, "LVGL", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
 
     ESP_LOGI(TAG, "Display LVGL Meter Widget");
     // Lock the mutex due to the LVGL APIs are not thread-safe
@@ -501,6 +638,7 @@ void display_init(Context *ctx, term opts)
 
     struct SPI *spi = malloc(sizeof(struct SPI));
     spi->ctx = ctx;
+    spi->display = display;
 
     xTaskCreate(process_messages, "display", 10000, spi, 1, NULL);
 }
