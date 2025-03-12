@@ -4,18 +4,47 @@
  * SPDX-License-Identifier: CC0-1.0
  */
 
-#include "driver/gpio.h"
-#include "driver/spi_master.h"
-#include "esp_err.h"
-#include "esp_lcd_panel_io.h"
-#include <globalcontext.h>
-#include "esp_lcd_panel_ops.h"
-#include "esp_lcd_panel_vendor.h"
-#include "esp_log.h"
-#include "esp_timer.h"
+#include "display_driver.h"
+
+#include <string.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#include "driver/gpio.h"
+#include "driver/spi_master.h"
+#include "esp_log.h"
+#include <esp_heap_caps.h>
+
+#include <atom.h>
+#include <bif.h>
+#include <context.h>
+#include <debug.h>
+#include <defaultatoms.h>
+#include <globalcontext.h>
+#include <interop.h>
+#include <mailbox.h>
+#include <module.h>
+#include <port.h>
+#include <sys.h>
+#include <term.h>
+#include <utils.h>
+
+#include <esp32_sys.h>
+
+#include <trace.h>
+
+// #include "backlight_gpio.h"
+#include "display_common.h"
+#include "display_items.h"
+#include "esp_err.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_lcd_panel_vendor.h"
+#include "esp_timer.h"
 #include "lvgl.h"
+#include "spi_display.h"
+
 #include <stdio.h>
 #include <sys/lock.h>
 #include <sys/param.h>
@@ -60,21 +89,124 @@ static const char *TAG = "gc9a01_display_driver";
 // LVGL library is not thread-safe, this example will call LVGL APIs from different tasks, so use a mutex to protect it
 static _lock_t lvgl_api_lock;
 
+static void display_init(Context *ctx, term opts);
+
 extern void example_lvgl_demo_ui(lv_disp_t *disp);
 
 static void send_message(term pid, term message, GlobalContext *global);
 
-static inline void delay(int ms)
+// static inline void delay(int ms)
+// {
+//     vTaskDelay(ms / portTICK_PERIOD_MS);
+// }
+
+struct SPI
 {
-    vTaskDelay(ms / portTICK_PERIOD_MS);
+    // struct SPIDisplay spi_disp;
+    // int dc_gpio;
+    // int reset_gpio;
+
+    // avm_int_t rotation;
+
+    Context *ctx;
+};
+
+// struct PendingReply
+// {
+//     uint64_t pending_call_ref_ticks;
+//     term pending_call_pid;
+// };
+
+static void do_update(Context *ctx, term display_list)
+{
+    int proper;
+    int len = term_list_length(display_list, &proper);
+    ESP_LOGI(TAG, "do_update");
+    // BaseDisplayItem *items = malloc(sizeof(BaseDisplayItem) * len);
+
+    // term t = display_list;
+    // for (int i = 0; i < len; i++) {
+    //     init_item(&items[i], term_get_list_head(t), ctx);
+    //     t = term_get_list_tail(t);
+    // }
+
+    // int screen_width = screen->w;
+    // int screen_height = screen->h;
+    // struct SPI *spi = ctx->platform_data;
+
+    // set_screen_paint_area(spi, 0, 0, screen_width, screen_height);
+    // writecommand(spi, ST7789_RAMWR);
+    // spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
+
+    // bool transaction_in_progress = false;
+
+    // for (int ypos = 0; ypos < screen_height; ypos++) {
+    //     int xpos = 0;
+    //     while (xpos < screen_width) {
+    //         int drawn_pixels = draw_x(xpos, ypos, items, len);
+    //         xpos += drawn_pixels;
+    //     }
+
+    //     if (transaction_in_progress) {
+    //         spi_transaction_t *trans;
+    //         // I did a quick measurement, and most of the time is spent waiting for DMA transaction
+    //         // eg. 23 us spent in draw_x, 188 us spent in spi_device_get_trans_result
+    //         spi_device_get_trans_result(spi->spi_disp.handle, &trans, portMAX_DELAY);
+    //     }
+
+    //     // NEW CODE
+    //     void *tmp = screen->pixels;
+    //     screen->pixels = screen->pixels_out;
+    //     screen->pixels_out = tmp;
+    //     spi_display_dmawrite(&spi->spi_disp, screen_width * sizeof(uint16_t), screen->pixels_out);
+    //     transaction_in_progress = true;
+    // }
+
+    // if (transaction_in_progress) {
+    //     spi_transaction_t *trans;
+    //     spi_device_get_trans_result(spi->spi_disp.handle, &trans, portMAX_DELAY);
+    // }
+
+    // spi_device_release_bus(spi->spi_disp.handle);
+
+    // destroy_items(items, len);
 }
 
-
-struct PendingReply
+static void draw_buffer(struct SPI *spi, int x, int y, int width, int height, const void *imgdata)
 {
-    uint64_t pending_call_ref_ticks;
-    term pending_call_pid;
-};
+    // const uint16_t *data = imgdata;
+
+    // set_screen_paint_area(spi, x, y, width, height);
+
+    // writecommand(spi, ST7789_RAMWR);
+
+    // int dest_size = width * height;
+    // int buf_pixel_size = (dest_size > 1024) ? 1024 : dest_size;
+
+    // int chunks = dest_size / 1024;
+
+    // uint16_t *tmpbuf = heap_caps_malloc(buf_pixel_size * sizeof(uint16_t), MALLOC_CAP_DMA);
+
+    // spi_device_acquire_bus(spi->spi_disp.handle, portMAX_DELAY);
+    // for (int i = 0; i < chunks; i++) {
+    //     const uint16_t *data_b = data + 1024 * i;
+    //     for (int j = 0; j < 1024; j++) {
+    //         tmpbuf[j] = SPI_SWAP_DATA_TX(data_b[j], 16);
+    //     }
+    //     spi_display_dmawrite(&spi->spi_disp, buf_pixel_size * sizeof(uint16_t), tmpbuf);
+    // }
+    // int last_chunk_size = dest_size - chunks * 1024;
+    // if (last_chunk_size) {
+    //     const uint16_t *data_b = data + chunks * 1024;
+    //     for (int j = 0; j < 1024; j++) {
+    //         tmpbuf[j] = SPI_SWAP_DATA_TX(data_b[j], 16);
+    //     }
+    //     spi_display_dmawrite(&spi->spi_disp, last_chunk_size * sizeof(uint16_t), tmpbuf);
+    // }
+    // spi_device_release_bus(spi->spi_disp.handle);
+
+    // free(tmpbuf);
+}
 
 static QueueHandle_t display_messages_queue;
 
@@ -90,6 +222,7 @@ static void process_message(Message *message, Context *ctx)
 
     term req = gen_message.req;
     if (UNLIKELY(!term_is_tuple(req) || term_get_tuple_arity(req) < 1)) {
+        ESP_LOGI(TAG, "process_message ~ !term_is_tuple(req)");
         AVM_ABORT();
     }
     term cmd = term_get_tuple_element(req, 0);
@@ -99,6 +232,7 @@ static void process_message(Message *message, Context *ctx)
     if (cmd == context_make_atom(ctx, "\x6"
                                       "update")) {
         term display_list = term_get_tuple_element(req, 1);
+        ESP_LOGI(TAG, "process_message ~ display_list %s", display_list);
         do_update(ctx, display_list);
 
     } else if (cmd == context_make_atom(ctx, "\xB"
@@ -111,7 +245,7 @@ static void process_message(Message *message, Context *ctx)
         unsigned long addr_high = term_to_int(term_get_tuple_element(req, 6));
 
         const void *data = (const void *) ((addr_low | (addr_high << 16)));
-
+        ESP_LOGI(TAG, "process_message ~ draw_buffer %s", &data);
         draw_buffer(spi, x, y, width, height, data);
 
         // draw_buffer is a kind of cast, no need to reply
@@ -139,6 +273,8 @@ static void process_messages(void *arg)
     while (true) {
         Message *message;
         xQueueReceive(display_messages_queue, &message, portMAX_DELAY);
+        ESP_LOGI(TAG, "PROCESS MESSAGE %s", &message);
+
         process_message(message, args->ctx);
 
         BEGIN_WITH_STACK_HEAP(1, temp_heap);
@@ -147,11 +283,12 @@ static void process_messages(void *arg)
     }
 }
 
-
 Context *gc9a01_display_create_port(GlobalContext *global, term opts)
 {
+    ESP_LOGI(TAG, "INIT GC9A01 DISPLAY");
     Context *ctx = context_new(global);
     ctx->native_handler = display_driver_consume_mailbox;
+    // display_init(ctx, opts);
     display_init(ctx, opts);
     return ctx;
 }
@@ -175,11 +312,9 @@ static NativeHandlerResult display_driver_consume_mailbox(Context *ctx)
 // this is how to get the rotation from the opts
 // term rotation = interop_kv_get_value_default(opts, ATOM_STR("\x8", "rotation"), term_from_int(0), ctx->global);
 
-
 //=======================================================
 //=======================================================
 //=======================================================
-
 
 static bool example_notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
@@ -253,10 +388,10 @@ static void example_lvgl_port_task(void *arg)
     }
 }
 
-void init_gc9a01(void)
+void display_init(Context *ctx, term opts)
 {
-    esp_log_level_set("*", ESP_LOG_INFO);
-    esp_log_level_set("gc9a01", ESP_LOG_DEBUG);
+    // esp_log_level_set("*", ESP_LOG_INFO);
+    // esp_log_level_set("gc9a01_display_driver", ESP_LOG_DEBUG);
 
     ESP_LOGI(TAG, "Turn off LCD backlight");
     gpio_config_t bk_gpio_config = {
@@ -354,11 +489,18 @@ void init_gc9a01(void)
     ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io_handle, &cbs, display));
 
     ESP_LOGI(TAG, "Create LVGL task");
-    xTaskCreate(example_lvgl_port_task, "LVGL", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
+    // xTaskCreate(example_lvgl_port_task, "LVGL", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
 
     ESP_LOGI(TAG, "Display LVGL Meter Widget");
     // Lock the mutex due to the LVGL APIs are not thread-safe
     // _lock_acquire(&lvgl_api_lock);
     // example_lvgl_demo_ui(display);
     // _lock_release(&lvgl_api_lock);
+
+    display_messages_queue = xQueueCreate(32, sizeof(Message *));
+
+    struct SPI *spi = malloc(sizeof(struct SPI));
+    spi->ctx = ctx;
+
+    xTaskCreate(process_messages, "display", 10000, spi, 1, NULL);
 }

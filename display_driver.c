@@ -29,11 +29,11 @@
 
 static const char *TAG = "display_driver";
 
-Context *acep_5in65_7c_display_driver_create_port(GlobalContext *global, term opts);
-Context *ili934x_display_create_port(GlobalContext *global, term opts);
-Context *memory_lcd_display_create_port(GlobalContext *global, term opts);
-Context *ssd1306_display_create_port(GlobalContext *global, term opts);
-Context *st7789_display_create_port(GlobalContext *global, term opts);
+// Context *acep_5in65_7c_display_driver_create_port(GlobalContext *global, term opts);
+// Context *ili934x_display_create_port(GlobalContext *global, term opts);
+// Context *memory_lcd_display_create_port(GlobalContext *global, term opts);
+// Context *ssd1306_display_create_port(GlobalContext *global, term opts);
+// Context *st7789_display_create_port(GlobalContext *global, term opts);
 Context *gc9a01_display_create_port(GlobalContext *global, term opts);
 
 Context *display_create_port(GlobalContext *global, term opts)
@@ -54,21 +54,22 @@ Context *display_create_port(GlobalContext *global, term opts)
     }
 
     Context *ctx = NULL;
-    if (!strcmp(compat_string, "waveshare,5in65-acep-7c")) {
-        ctx = acep_5in65_7c_display_driver_create_port(global, opts);
-    } else if (!strcmp(compat_string, "sharp,memory-lcd")) {
-        ctx = memory_lcd_display_create_port(global, opts);
-    } else if (!strcmp(compat_string, "ilitek,ili9341")) {
-        ctx = ili934x_display_create_port(global, opts);
-    } else if (!strcmp(compat_string, "ilitek,ili9342c")) {
-        ctx = ili934x_display_create_port(global, opts);
-    } else if (!strcmp(compat_string, "solomon-systech,ssd1306")) {
-        ctx = ssd1306_display_create_port(global, opts);
-    } else if (!strcmp(compat_string, "sino-wealth,sh1106")) {
-        ctx = ssd1306_display_create_port(global, opts);
-    } else if (!strcmp(compat_string, "sitronix,st7789")) {
-        ctx = st7789_display_create_port(global, opts);
-    } else if (!strcmp(compat_string, "galaxycore,gc9a01")) {
+    // if (!strcmp(compat_string, "waveshare,5in65-acep-7c")) {
+    //     ctx = acep_5in65_7c_display_driver_create_port(global, opts);
+    // } else if (!strcmp(compat_string, "sharp,memory-lcd")) {
+    //     ctx = memory_lcd_display_create_port(global, opts);
+    // } else if (!strcmp(compat_string, "ilitek,ili9341")) {
+    //     ctx = ili934x_display_create_port(global, opts);
+    // } else if (!strcmp(compat_string, "ilitek,ili9342c")) {
+    //     ctx = ili934x_display_create_port(global, opts);
+    // } else if (!strcmp(compat_string, "solomon-systech,ssd1306")) {
+    //     ctx = ssd1306_display_create_port(global, opts);
+    // } else if (!strcmp(compat_string, "sino-wealth,sh1106")) {
+    //     ctx = ssd1306_display_create_port(global, opts);
+    // } else if (!strcmp(compat_string, "sitronix,st7789")) {
+    //     ctx = st7789_display_create_port(global, opts);
+    // } else
+    if (!strcmp(compat_string, "galaxycore,gc9a01")) {
         ctx = gc9a01_display_create_port(global, opts);
     } else {
         ESP_LOGE(TAG, "No matching display driver for given `comptaible`: `%s`.", compat_string);
