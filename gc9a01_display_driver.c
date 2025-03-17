@@ -52,7 +52,8 @@
 
 #include "esp_lcd_gc9a01.h"
 
-static const char *TAG = "gc9a01_display_driver";
+static const char *TAG
+    = "gc9a01_display_driver";
 
 // Using SPI2 in the example
 #define LCD_HOST SPI2_HOST
@@ -96,23 +97,23 @@ extern void example_lvgl_demo_ui(lv_display_t *disp);
 static void send_message(term pid, term message, GlobalContext *global);
 
 // Forward declarations
-static lv_obj_t* create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDisplayItem *item);
+static lv_obj_t *create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDisplayItem *item);
 
-// static inline void delay(int ms)
-// {
-//     vTaskDelay(ms / portTICK_PERIOD_MS);
-// }
+static inline void delay(int ms)
+{
+    vTaskDelay(ms / portTICK_PERIOD_MS);
+}
 
 struct SPI
 {
-    // struct SPIDisplay spi_disp;
-    // int dc_gpio;
+    struct SPIDisplay spi_disp;
+    int dc_gpio;
     // int reset_gpio;
 
-    // avm_int_t rotation;
+    avm_int_t rotation;
 
     Context *ctx;
-    lv_display_t *display;  // Store the LVGL display pointer
+    lv_display_t *display; // Store the LVGL display pointer
 };
 
 // struct PendingReply
@@ -129,7 +130,7 @@ static void do_update(Context *ctx, term display_list)
 
     // Get the LVGL display
     lv_display_t *display = NULL;
-    
+
     // Find the active display
     display = lv_display_get_default();
     if (!display) {
@@ -137,7 +138,7 @@ static void do_update(Context *ctx, term display_list)
         return;
     }
     ESP_LOGI(TAG, "do_update: Found LVGL display");
-    
+
     // Get the active screen
     lv_obj_t *scr = lv_display_get_screen_active(display);
     if (!scr) {
@@ -145,90 +146,90 @@ static void do_update(Context *ctx, term display_list)
         return;
     }
     ESP_LOGI(TAG, "do_update: Found active screen");
-    
+
     // Clear the screen first
     ESP_LOGI(TAG, "do_update: Cleaning screen");
     lv_obj_clean(scr);
-    
+
     // Process each item in the display list
     term t = display_list;
     for (int i = 0; i < len; i++) {
         term item_term = term_get_list_head(t);
-        
+
         // Create a temporary BaseDisplayItem to parse the term
         BaseDisplayItem item;
         init_item(&item, item_term, ctx);
-        
+
         // Process based on primitive type
         switch (item.primitive) {
             case Rect: {
-                ESP_LOGI(TAG, "do_update: Creating rectangle at (%d,%d) size %dx%d color 0x%06x", 
-                         item.x, item.y, item.width, item.height, item.brcolor);
-                
+                ESP_LOGI(TAG, "do_update: Creating rectangle at (%d,%d) size %dx%d color 0x%06x",
+                    item.x, item.y, item.width, item.height, item.brcolor);
+
                 // Create an LVGL rectangle
                 lv_obj_t *rect = lv_obj_create(scr);
-                
+
                 // Set position and size
                 lv_obj_set_pos(rect, item.x, item.y);
                 lv_obj_set_size(rect, item.width, item.height);
-                
+
                 // Set color (convert from RGBA8888 to LVGL color format)
                 lv_color_t color = lv_color_make(
-                    (item.brcolor >> 16) & 0xFF,  // R
-                    (item.brcolor >> 8) & 0xFF,   // G
-                    item.brcolor & 0xFF           // B
+                    (item.brcolor >> 16) & 0xFF, // R
+                    (item.brcolor >> 8) & 0xFF, // G
+                    item.brcolor & 0xFF // B
                 );
-                
+
                 lv_obj_set_style_bg_color(rect, color, LV_PART_MAIN);
                 lv_obj_set_style_border_width(rect, 0, LV_PART_MAIN);
                 break;
             }
-            
+
             case Text: {
-                ESP_LOGI(TAG, "do_update: Creating text at (%d,%d) text '%s' color 0x%06x", 
-                         item.x, item.y, item.data.text_data.text, item.data.text_data.fgcolor);
-                
+                ESP_LOGI(TAG, "do_update: Creating text at (%d,%d) text '%s' color 0x%06x",
+                    item.x, item.y, item.data.text_data.text, item.data.text_data.fgcolor);
+
                 // Create an LVGL label
                 lv_obj_t *label = lv_label_create(scr);
-                
+
                 // Set position
                 lv_obj_set_pos(label, item.x, item.y);
-                
+
                 // Set text
                 lv_label_set_text(label, item.data.text_data.text);
-                
+
                 // Set color
                 lv_color_t color = lv_color_make(
-                    (item.data.text_data.fgcolor >> 16) & 0xFF,  // R
-                    (item.data.text_data.fgcolor >> 8) & 0xFF,   // G
-                    item.data.text_data.fgcolor & 0xFF           // B
+                    (item.data.text_data.fgcolor >> 16) & 0xFF, // R
+                    (item.data.text_data.fgcolor >> 8) & 0xFF, // G
+                    item.data.text_data.fgcolor & 0xFF // B
                 );
-                
+
                 lv_obj_set_style_text_color(label, color, LV_PART_MAIN);
                 break;
             }
-            
+
             case Image: {
-                ESP_LOGI(TAG, "do_update: Creating image at (%d,%d) size %dx%d", 
-                         item.x, item.y, item.width, item.height);
-                
+                ESP_LOGI(TAG, "do_update: Creating image at (%d,%d) size %dx%d",
+                    item.x, item.y, item.width, item.height);
+
                 // For images, we need to create an LVGL image descriptor
                 // This is more complex and depends on your image format
                 // For simplicity, we'll create a basic implementation
-                
+
                 // Create a buffer for the image data
                 lv_color_t *buf = malloc(item.width * item.height * sizeof(lv_color_t));
                 if (!buf) {
-                    ESP_LOGE(TAG, "do_update: Failed to allocate memory for image (%d bytes)", 
-                             item.width * item.height * sizeof(lv_color_t));
+                    ESP_LOGE(TAG, "do_update: Failed to allocate memory for image (%d bytes)",
+                        item.width * item.height * sizeof(lv_color_t));
                     break;
                 }
-                ESP_LOGI(TAG, "do_update: Allocated %d bytes for image buffer", 
-                         item.width * item.height * sizeof(lv_color_t));
-                
+                ESP_LOGI(TAG, "do_update: Allocated %d bytes for image buffer",
+                    item.width * item.height * sizeof(lv_color_t));
+
                 // Convert image data to LVGL format
                 // Assuming image data is in RGB565 format
-                const uint16_t *src = (const uint16_t *)item.data.image_data.pix;
+                const uint16_t *src = (const uint16_t *) item.data.image_data.pix;
                 ESP_LOGI(TAG, "do_update: Converting image data from RGB565 to LVGL format");
                 for (int j = 0; j < item.width * item.height; j++) {
                     uint16_t pixel = src[j];
@@ -236,40 +237,40 @@ static void do_update(Context *ctx, term display_list)
                     uint8_t r = (pixel >> 11) & 0x1F;
                     uint8_t g = (pixel >> 5) & 0x3F;
                     uint8_t b = pixel & 0x1F;
-                    
+
                     // Scale to 8-bit per channel
                     r = (r * 255) / 31;
                     g = (g * 255) / 63;
                     b = (b * 255) / 31;
-                    
+
                     buf[j] = lv_color_make(r, g, b);
                 }
-                
+
                 // Create an LVGL image descriptor
                 lv_image_dsc_t img_dsc;
-                img_dsc.data = (const uint8_t *)buf;
+                img_dsc.data = (const uint8_t *) buf;
                 img_dsc.data_size = item.width * item.height * sizeof(lv_color_t);
                 img_dsc.header.w = item.width;
                 img_dsc.header.h = item.height;
                 img_dsc.header.cf = LV_COLOR_FORMAT_NATIVE;
-                
+
                 // Create an LVGL image
                 ESP_LOGI(TAG, "do_update: Creating LVGL image object");
                 lv_obj_t *img = lv_image_create(scr);
                 lv_image_set_src(img, &img_dsc);
                 lv_obj_set_pos(img, item.x, item.y);
-                
+
                 // Note: This creates a memory leak as we don't free the buffer
                 // In a real implementation, you'd need to handle this properly
                 ESP_LOGW(TAG, "do_update: Warning - image buffer not freed (memory leak)");
                 break;
             }
-            
+
             case ScaledCroppedImage: {
                 ESP_LOGI(TAG, "do_update: Creating scaled/cropped image at (%d,%d) size %dx%d from source (%d,%d) with scale (%d,%d)",
-                         item.x, item.y, item.width, item.height, 
-                         item.source_x, item.source_y, item.x_scale, item.y_scale);
-                
+                    item.x, item.y, item.width, item.height,
+                    item.source_x, item.source_y, item.x_scale, item.y_scale);
+
                 // Use the memory-efficient implementation
                 lv_obj_t *img_obj = create_scaled_cropped_image_efficient(scr, &item);
                 if (!img_obj) {
@@ -277,16 +278,16 @@ static void do_update(Context *ctx, term display_list)
                 }
                 break;
             }
-            
+
             default:
                 ESP_LOGW(TAG, "do_update: Unknown primitive type: %d", item.primitive);
                 break;
         }
-        
+
         // Move to the next item in the list
         t = term_get_list_tail(t);
     }
-    
+
     // Force a refresh of the display
     ESP_LOGI(TAG, "do_update: Forcing display refresh with lv_refr_now()");
     lv_refr_now(display);
@@ -296,40 +297,40 @@ static void do_update(Context *ctx, term display_list)
 static void draw_buffer(struct SPI *spi, int x, int y, int width, int height, const void *imgdata)
 {
     ESP_LOGI(TAG, "draw_buffer: Drawing buffer at (%d,%d) size %dx%d", x, y, width, height);
-    
+
     // Get the LVGL display
     lv_display_t *display = spi->display;
     if (!display) {
         ESP_LOGE(TAG, "draw_buffer: No LVGL display found");
         return;
     }
-    
+
     // Get the active screen
     lv_obj_t *scr = lv_display_get_screen_active(display);
     if (!scr) {
         ESP_LOGE(TAG, "draw_buffer: No active screen found");
         return;
     }
-    
+
     // Check available memory
     size_t buf_size = width * height * sizeof(lv_color_t);
     size_t free_heap = esp_get_free_heap_size();
     size_t largest_block = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
-    
+
     ESP_LOGI(TAG, "draw_buffer: Memory requirements - Buffer: %d bytes", buf_size);
     ESP_LOGI(TAG, "draw_buffer: Memory available - Free heap: %d bytes, Largest free block: %d bytes",
-             free_heap, largest_block);
-    
+        free_heap, largest_block);
+
     if (buf_size > largest_block) {
         ESP_LOGW(TAG, "draw_buffer: Not enough contiguous memory, using tiled approach");
-        
+
         // Determine a reasonable tile size based on available memory
         // Use at most 1/4 of the largest available block to be safe
         size_t max_tile_bytes = largest_block / 4;
         int max_tile_pixels = max_tile_bytes / sizeof(lv_color_t);
         int tile_width = width;
         int tile_height = max_tile_pixels / tile_width;
-        
+
         // Ensure tile height is at least 1 pixel
         if (tile_height < 1) {
             tile_height = 1;
@@ -338,18 +339,18 @@ static void draw_buffer(struct SPI *spi, int x, int y, int width, int height, co
                 tile_width = 1; // Absolute minimum
             }
         }
-        
+
         ESP_LOGI(TAG, "draw_buffer: Using tiles of size %dx%d pixels", tile_width, tile_height);
-        
+
         // Process the image in tiles
-        const uint16_t *src_data = (const uint16_t *)imgdata;
-        
+        const uint16_t *src_data = (const uint16_t *) imgdata;
+
         for (int ty = 0; ty < height; ty += tile_height) {
             int current_tile_height = (ty + tile_height > height) ? (height - ty) : tile_height;
-            
+
             for (int tx = 0; tx < width; tx += tile_width) {
                 int current_tile_width = (tx + tile_width > width) ? (width - tx) : tile_width;
-                
+
                 // Allocate buffer for a single tile
                 size_t tile_buf_size = current_tile_width * current_tile_height * sizeof(lv_color_t);
                 lv_color_t *tile_buf = malloc(tile_buf_size);
@@ -357,43 +358,43 @@ static void draw_buffer(struct SPI *spi, int x, int y, int width, int height, co
                     ESP_LOGE(TAG, "draw_buffer: Failed to allocate memory for tile (%d bytes)", tile_buf_size);
                     return;
                 }
-                
+
                 // Convert the tile data from RGB565 to LVGL format
                 for (int j = 0; j < current_tile_height; j++) {
                     for (int i = 0; i < current_tile_width; i++) {
                         int src_idx = (ty + j) * width + (tx + i);
                         uint16_t pixel = src_data[src_idx];
-                        
+
                         // Convert RGB565 to LVGL color format
                         uint8_t r = (pixel >> 11) & 0x1F;
                         uint8_t g = (pixel >> 5) & 0x3F;
                         uint8_t b = pixel & 0x1F;
-                        
+
                         // Scale to 8-bit per channel
                         r = (r * 255) / 31;
                         g = (g * 255) / 63;
                         b = (b * 255) / 31;
-                        
+
                         tile_buf[j * current_tile_width + i] = lv_color_make(r, g, b);
                     }
                 }
-                
+
                 // Create an LVGL image descriptor for this tile
                 lv_image_dsc_t img_dsc;
-                img_dsc.data = (const uint8_t *)tile_buf;
+                img_dsc.data = (const uint8_t *) tile_buf;
                 img_dsc.data_size = tile_buf_size;
                 img_dsc.header.w = current_tile_width;
                 img_dsc.header.h = current_tile_height;
                 img_dsc.header.cf = LV_COLOR_FORMAT_NATIVE;
-                
+
                 // Create an LVGL image for this tile
                 lv_obj_t *img = lv_image_create(scr);
                 lv_image_set_src(img, &img_dsc);
                 lv_obj_set_pos(img, x + tx, y + ty);
-                
+
                 // Force a refresh for this tile
                 lv_refr_now(display);
-                
+
                 // Clean up
                 lv_obj_delete(img);
                 free(tile_buf);
@@ -406,43 +407,43 @@ static void draw_buffer(struct SPI *spi, int x, int y, int width, int height, co
             ESP_LOGE(TAG, "draw_buffer: Failed to allocate memory for image buffer (%d bytes)", buf_size);
             return;
         }
-        
+
         // Convert image data from RGB565 to LVGL format
-        const uint16_t *src = (const uint16_t *)imgdata;
+        const uint16_t *src = (const uint16_t *) imgdata;
         for (int j = 0; j < height; j++) {
             for (int i = 0; i < width; i++) {
                 uint16_t pixel = src[j * width + i];
-                
+
                 // Convert RGB565 to LVGL color format
                 uint8_t r = (pixel >> 11) & 0x1F;
                 uint8_t g = (pixel >> 5) & 0x3F;
                 uint8_t b = pixel & 0x1F;
-                
+
                 // Scale to 8-bit per channel
                 r = (r * 255) / 31;
                 g = (g * 255) / 63;
                 b = (b * 255) / 31;
-                
+
                 buf[j * width + i] = lv_color_make(r, g, b);
             }
         }
-        
+
         // Create an LVGL image descriptor
         lv_image_dsc_t img_dsc;
-        img_dsc.data = (const uint8_t *)buf;
+        img_dsc.data = (const uint8_t *) buf;
         img_dsc.data_size = buf_size;
         img_dsc.header.w = width;
         img_dsc.header.h = height;
         img_dsc.header.cf = LV_COLOR_FORMAT_NATIVE;
-        
+
         // Create an LVGL image
         lv_obj_t *img = lv_image_create(scr);
         lv_image_set_src(img, &img_dsc);
         lv_obj_set_pos(img, x, y);
-        
+
         // Force a refresh
         lv_refr_now(display);
-        
+
         // Clean up
         lv_obj_delete(img);
         free(buf);
@@ -456,7 +457,7 @@ static NativeHandlerResult display_driver_consume_mailbox(Context *ctx);
 static void process_message(Message *message, Context *ctx)
 {
     ESP_LOGI(TAG, "process_message: Processing new message");
-    
+
     GenMessage gen_message;
     if (UNLIKELY(port_parse_gen_message(message->message, &gen_message) != GenCallMessage)) {
         ESP_LOGE(TAG, "process_message: Received invalid message format");
@@ -477,7 +478,7 @@ static void process_message(Message *message, Context *ctx)
                                       "update")) {
         ESP_LOGI(TAG, "process_message: Received 'update' command");
         term display_list = term_get_tuple_element(req, 1);
-        
+
         // Lock the mutex due to the LVGL APIs are not thread-safe
         ESP_LOGI(TAG, "process_message: Acquiring LVGL mutex");
         _lock_acquire(&lvgl_api_lock);
@@ -536,7 +537,29 @@ static void process_messages(void *arg)
         ESP_LOGI(TAG, "process_messages: Waiting for message from queue");
         Message *message;
         xQueueReceive(display_messages_queue, &message, portMAX_DELAY);
-        ESP_LOGI(TAG, "process_messages: Received message from queue");
+
+        // First validate the message format
+        // this is still not working but somehow adds a delay that allows to correctly start processing messages
+        GenMessage gen_message;
+        if (UNLIKELY(port_parse_gen_message(message->message, &gen_message) != GenCallMessage)) {
+            ESP_LOGW(TAG, "process_messages: Received invalid message format");
+            // Clean up invalid message
+            BEGIN_WITH_STACK_HEAP(1, temp_heap);
+            mailbox_message_dispose(&message->base, &temp_heap);
+            END_WITH_STACK_HEAP(temp_heap, args->ctx->global);
+            continue;
+        }
+
+        // Now that we know it's valid, we can safely log it
+        ESP_LOGI(TAG, "process_messages: Received valid message:");
+        ESP_LOGI(TAG, "process_messages: From PID: %lx", term_to_local_process_id(gen_message.pid));
+
+// If you still want to see the raw message content (optional)
+#ifdef DEBUG
+        fprintf(stdout, "Message content: ");
+        term_display(stdout, message->message, args->ctx);
+        fprintf(stdout, "\n");
+#endif
 
         process_message(message, args->ctx);
 
@@ -553,7 +576,6 @@ Context *gc9a01_display_create_port(GlobalContext *global, term opts)
     ESP_LOGI(TAG, "INIT GC9A01 DISPLAY");
     Context *ctx = context_new(global);
     ctx->native_handler = display_driver_consume_mailbox;
-    // display_init(ctx, opts);
     display_init(ctx, opts);
     return ctx;
 }
@@ -655,9 +677,6 @@ static void example_lvgl_port_task(void *arg)
 
 void display_init(Context *ctx, term opts)
 {
-    // esp_log_level_set("*", ESP_LOG_INFO);
-    // esp_log_level_set("gc9a01_display_driver", ESP_LOG_DEBUG);
-
     ESP_LOGI(TAG, "Turn off LCD backlight");
     gpio_config_t bk_gpio_config = {
         .mode = GPIO_MODE_OUTPUT,
@@ -665,16 +684,25 @@ void display_init(Context *ctx, term opts)
     };
     ESP_ERROR_CHECK(gpio_config(&bk_gpio_config));
 
-    ESP_LOGI(TAG, "Initialize SPI bus");
-    spi_bus_config_t buscfg = {
-        .sclk_io_num = EXAMPLE_PIN_NUM_SCLK,
-        .mosi_io_num = EXAMPLE_PIN_NUM_MOSI,
-        .miso_io_num = EXAMPLE_PIN_NUM_MISO,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = EXAMPLE_LCD_H_RES * 80 * sizeof(uint16_t),
-    };
-    ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
+    display_messages_queue = xQueueCreate(32, sizeof(Message *));
+
+    struct SPI *spi = malloc(sizeof(struct SPI));
+    ctx->platform_data = spi;
+    spi->ctx = ctx;
+
+    // struct SPIDisplayConfig spi_config;
+    // spi_display_init_config(&spi_config);
+    // spi_config.mode = 0;
+    // spi_config.clock_speed_hz = EXAMPLE_LCD_PIXEL_CLOCK_HZ;
+    // spi_display_parse_config(&spi_config, opts, ctx->global); // takes CS pin
+    // spi_display_init(&spi->spi_disp, &spi_config);
+    // ^^^ this in the end adds the device with spi_bus_add_device. Here this is made using esp_lcd_new_panel_io_spi
+
+    bool ok = display_common_gpio_from_opts(opts, ATOM_STR("\x2", "dc"), &spi->dc_gpio, ctx->global);
+
+    term rotation = interop_kv_get_value_default(opts, ATOM_STR("\x8", "rotation"), term_from_int(0), ctx->global);
+    ok = ok && term_is_integer(rotation);
+    spi->rotation = term_to_int(rotation);
 
     ESP_LOGI(TAG, "Install panel IO");
     esp_lcd_panel_io_handle_t io_handle = NULL;
@@ -756,34 +784,31 @@ void display_init(Context *ctx, term opts)
     ESP_LOGI(TAG, "Create LVGL task");
     xTaskCreate(example_lvgl_port_task, "LVGL", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
 
-    ESP_LOGI(TAG, "Display LVGL Meter Widget");
+    // ESP_LOGI(TAG, "Display LVGL Meter Widget");
     // Lock the mutex due to the LVGL APIs are not thread-safe
     // _lock_acquire(&lvgl_api_lock);
     // example_lvgl_demo_ui(display);
     // _lock_release(&lvgl_api_lock);
 
-    display_messages_queue = xQueueCreate(32, sizeof(Message *));
-
-    struct SPI *spi = malloc(sizeof(struct SPI));
-    spi->ctx = ctx;
     spi->display = display;
 
-    xTaskCreate(process_messages, "display", 10000, spi, 1, NULL);
+    xTaskCreate(process_messages, "display", 10000, spi, 2, NULL);
 }
 
-static lv_obj_t* create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDisplayItem *item) {
+static lv_obj_t *create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDisplayItem *item)
+{
     ESP_LOGI(TAG, "Creating efficient scaled/cropped image at (%d,%d) size %dx%d from source (%d,%d) with scale (%d,%d)",
-             item->x, item->y, item->width, item->height, 
-             item->source_x, item->source_y, item->x_scale, item->y_scale);
-    
+        item->x, item->y, item->width, item->height,
+        item->source_x, item->source_y, item->x_scale, item->y_scale);
+
     // Get source image dimensions
     int img_width = item->data.image_data_with_size.width;
     int img_height = item->data.image_data_with_size.height;
-    
+
     // Calculate the portion of the source image we need
     int src_width = item->width / item->x_scale;
     int src_height = item->height / item->y_scale;
-    
+
     // Make sure we don't go beyond the source image boundaries
     if (item->source_x + src_width > img_width) {
         src_width = img_width - item->source_x;
@@ -791,33 +816,33 @@ static lv_obj_t* create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
     if (item->source_y + src_height > img_height) {
         src_height = img_height - item->source_y;
     }
-    
+
     // Log memory requirements
     size_t dst_buf_size = item->width * item->height * sizeof(lv_color_t);
     size_t free_heap = esp_get_free_heap_size();
     size_t largest_block = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
-    
+
     ESP_LOGI(TAG, "Memory requirements - Destination buffer: %d bytes", dst_buf_size);
     ESP_LOGI(TAG, "Memory available - Free heap: %d bytes, Largest free block: %d bytes",
-             free_heap, largest_block);
-    
+        free_heap, largest_block);
+
     // Check if we have enough memory for the full buffer
     if (dst_buf_size > largest_block) {
         ESP_LOGW(TAG, "Not enough contiguous memory for full image, using tiled approach");
-        
+
         // Create a canvas object instead
         lv_obj_t *canvas = lv_canvas_create(parent);
-        
+
         // Set position
         lv_obj_set_pos(canvas, item->x, item->y);
-        
+
         // Determine a reasonable tile size based on available memory
         // Use at most 1/4 of the largest available block to be safe
         size_t max_tile_bytes = largest_block / 4;
         int max_tile_pixels = max_tile_bytes / sizeof(lv_color_t);
         int tile_width = item->width;
         int tile_height = max_tile_pixels / tile_width;
-        
+
         // Ensure tile height is at least 1 pixel
         if (tile_height < 1) {
             tile_height = 1;
@@ -826,7 +851,7 @@ static lv_obj_t* create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
                 tile_width = 1; // Absolute minimum
             }
         }
-        
+
         // Allocate buffer for a single tile
         size_t tile_buf_size = tile_width * tile_height * sizeof(lv_color_t);
         lv_color_t *tile_buf = malloc(tile_buf_size);
@@ -834,25 +859,23 @@ static lv_obj_t* create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
             ESP_LOGE(TAG, "Failed to allocate memory even for a small tile (%d bytes)", tile_buf_size);
             return NULL;
         }
-        
-        ESP_LOGI(TAG, "Using tiles of size %dx%d pixels (%d bytes each)", 
-                 tile_width, tile_height, tile_buf_size);
-        
+
+        ESP_LOGI(TAG, "Using tiles of size %dx%d pixels (%d bytes each)",
+            tile_width, tile_height, tile_buf_size);
+
         // Create a canvas buffer for the entire image
         lv_canvas_set_buffer(canvas, tile_buf, tile_width, tile_height, LV_COLOR_FORMAT_NATIVE);
-        
+
         // Process the image in tiles
-        const uint32_t *src_img = (const uint32_t *)item->data.image_data_with_size.pix;
-        
+        const uint32_t *src_img = (const uint32_t *) item->data.image_data_with_size.pix;
+
         // Draw each tile
         for (int ty = 0; ty < item->height; ty += tile_height) {
-            int current_tile_height = (ty + tile_height > item->height) ? 
-                                      (item->height - ty) : tile_height;
-            
+            int current_tile_height = (ty + tile_height > item->height) ? (item->height - ty) : tile_height;
+
             for (int tx = 0; tx < item->width; tx += tile_width) {
-                int current_tile_width = (tx + tile_width > item->width) ? 
-                                         (item->width - tx) : tile_width;
-                
+                int current_tile_width = (tx + tile_width > item->width) ? (item->width - tx) : tile_width;
+
                 // Process this tile
                 for (int y = 0; y < current_tile_height; y++) {
                     for (int x = 0; x < current_tile_width; x++) {
@@ -861,21 +884,23 @@ static lv_obj_t* create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
                         int dst_y = ty + y;
                         int src_x = dst_x / item->x_scale;
                         int src_y = dst_y / item->y_scale;
-                        
+
                         // Ensure we're within bounds
-                        if (src_x >= src_width) src_x = src_width - 1;
-                        if (src_y >= src_height) src_y = src_height - 1;
-                        
+                        if (src_x >= src_width)
+                            src_x = src_width - 1;
+                        if (src_y >= src_height)
+                            src_y = src_height - 1;
+
                         // Get the source pixel
                         int src_idx = (item->source_y + src_y) * img_width + (item->source_x + src_x);
                         uint32_t rgba = src_img[src_idx];
-                        
+
                         // Extract RGBA components
                         uint8_t r = (rgba >> 24) & 0xFF;
                         uint8_t g = (rgba >> 16) & 0xFF;
                         uint8_t b = (rgba >> 8) & 0xFF;
                         uint8_t a = rgba & 0xFF;
-                        
+
                         // If pixel is transparent and we have a background color
                         if (a < 128 && item->brcolor != 0) {
                             // Use background color
@@ -883,18 +908,18 @@ static lv_obj_t* create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
                             g = (item->brcolor >> 16) & 0xFF;
                             b = (item->brcolor >> 8) & 0xFF;
                         }
-                        
+
                         // Set the pixel in the tile
                         lv_canvas_set_px(canvas, x, y, lv_color_make(r, g, b), LV_OPA_COVER);
                     }
                 }
-                
+
                 // Draw the tile to the screen
                 // In a real implementation, you would need to copy this tile to the screen
                 // For now, we're just demonstrating the concept
             }
         }
-        
+
         // We keep the tile buffer allocated as it's used by the canvas
         return canvas;
     } else {
@@ -904,32 +929,34 @@ static lv_obj_t* create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
             ESP_LOGE(TAG, "Failed to allocate memory for scaled image buffer (%d bytes)", dst_buf_size);
             return NULL;
         }
-        
+
         ESP_LOGI(TAG, "Successfully allocated destination buffer");
-        
+
         // Process the image
-        const uint32_t *src_img = (const uint32_t *)item->data.image_data_with_size.pix;
-        
+        const uint32_t *src_img = (const uint32_t *) item->data.image_data_with_size.pix;
+
         for (int y = 0; y < item->height; y++) {
             for (int x = 0; x < item->width; x++) {
                 // Calculate source coordinates
                 int src_x = x / item->x_scale;
                 int src_y = y / item->y_scale;
-                
+
                 // Ensure we're within bounds
-                if (src_x >= src_width) src_x = src_width - 1;
-                if (src_y >= src_height) src_y = src_height - 1;
-                
+                if (src_x >= src_width)
+                    src_x = src_width - 1;
+                if (src_y >= src_height)
+                    src_y = src_height - 1;
+
                 // Get the source pixel
                 int src_idx = (item->source_y + src_y) * img_width + (item->source_x + src_x);
                 uint32_t rgba = src_img[src_idx];
-                
+
                 // Extract RGBA components
                 uint8_t r = (rgba >> 24) & 0xFF;
                 uint8_t g = (rgba >> 16) & 0xFF;
                 uint8_t b = (rgba >> 8) & 0xFF;
                 uint8_t a = rgba & 0xFF;
-                
+
                 // If pixel is transparent and we have a background color
                 if (a < 128 && item->brcolor != 0) {
                     // Use background color
@@ -937,12 +964,12 @@ static lv_obj_t* create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
                     g = (item->brcolor >> 16) & 0xFF;
                     b = (item->brcolor >> 8) & 0xFF;
                 }
-                
+
                 // Set the destination pixel
                 dst_buf[y * item->width + x] = lv_color_make(r, g, b);
             }
         }
-        
+
         // Create an LVGL image descriptor
         lv_image_dsc_t *img_dsc = malloc(sizeof(lv_image_dsc_t));
         if (!img_dsc) {
@@ -950,23 +977,23 @@ static lv_obj_t* create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
             free(dst_buf);
             return NULL;
         }
-        
-        img_dsc->data = (const uint8_t *)dst_buf;
+
+        img_dsc->data = (const uint8_t *) dst_buf;
         img_dsc->data_size = dst_buf_size;
         img_dsc->header.w = item->width;
         img_dsc->header.h = item->height;
         img_dsc->header.cf = LV_COLOR_FORMAT_NATIVE;
-        
+
         // Create an LVGL image
         ESP_LOGI(TAG, "Creating LVGL image object for scaled/cropped image");
         lv_obj_t *img = lv_image_create(parent);
         lv_image_set_src(img, img_dsc);
         lv_obj_set_pos(img, item->x, item->y);
-        
+
         // Note: This creates a memory leak as we don't free the buffer
         // In a real implementation, you'd need to handle this properly
         ESP_LOGW(TAG, "Warning - scaled image buffer not freed (memory leak)");
-        
+
         return img;
     }
 }
