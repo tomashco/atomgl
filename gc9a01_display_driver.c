@@ -97,7 +97,7 @@ extern void example_lvgl_demo_ui(lv_display_t *disp);
 static void send_message(term pid, term message, GlobalContext *global);
 
 // Forward declarations
-static lv_obj_t *create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDisplayItem *item);
+static lv_obj_t *create_scaled_cropped_image(lv_obj_t *parent, BaseDisplayItem *item);
 
 static inline void delay(int ms)
 {
@@ -272,7 +272,7 @@ static void do_update(Context *ctx, term display_list)
                     item.source_x, item.source_y, item.x_scale, item.y_scale);
 
                 // Use the memory-efficient implementation
-                lv_obj_t *img_obj = create_scaled_cropped_image_efficient(scr, &item);
+                lv_obj_t *img_obj = create_scaled_cropped_image(scr, &item);
                 if (!img_obj) {
                     ESP_LOGE(TAG, "do_update: Failed to create scaled/cropped image");
                 }
@@ -538,29 +538,6 @@ static void process_messages(void *arg)
         Message *message;
         xQueueReceive(display_messages_queue, &message, portMAX_DELAY);
 
-        // First validate the message format
-        // this is still not working but somehow adds a delay that allows to correctly start processing messages
-        GenMessage gen_message;
-        if (UNLIKELY(port_parse_gen_message(message->message, &gen_message) != GenCallMessage)) {
-            ESP_LOGW(TAG, "process_messages: Received invalid message format");
-            // Clean up invalid message
-            BEGIN_WITH_STACK_HEAP(1, temp_heap);
-            mailbox_message_dispose(&message->base, &temp_heap);
-            END_WITH_STACK_HEAP(temp_heap, args->ctx->global);
-            continue;
-        }
-
-        // Now that we know it's valid, we can safely log it
-        ESP_LOGI(TAG, "process_messages: Received valid message:");
-        ESP_LOGI(TAG, "process_messages: From PID: %lx", term_to_local_process_id(gen_message.pid));
-
-// If you still want to see the raw message content (optional)
-#ifdef DEBUG
-        fprintf(stdout, "Message content: ");
-        term_display(stdout, message->message, args->ctx);
-        fprintf(stdout, "\n");
-#endif
-
         process_message(message, args->ctx);
 
         ESP_LOGI(TAG, "process_messages: Disposing message");
@@ -795,7 +772,21 @@ void display_init(Context *ctx, term opts)
     xTaskCreate(process_messages, "display", 10000, spi, 2, NULL);
 }
 
-static lv_obj_t *create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDisplayItem *item)
+static void image_obj_destructor_cb(lv_event_t *e)
+{
+    // Get the image descriptor and buffer from user data
+    lv_image_dsc_t *img_dsc = lv_event_get_user_data(e);
+    if (img_dsc) {
+        // Free the image buffer
+        if (img_dsc->data) {
+            free((void *) img_dsc->data);
+        }
+        // Free the descriptor itself
+        free(img_dsc);
+    }
+}
+
+static lv_obj_t *create_scaled_cropped_image(lv_obj_t *parent, BaseDisplayItem *item)
 {
     ESP_LOGI(TAG, "Creating efficient scaled/cropped image at (%d,%d) size %dx%d from source (%d,%d) with scale (%d,%d)",
         item->x, item->y, item->width, item->height,
@@ -817,7 +808,7 @@ static lv_obj_t *create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
         src_height = img_height - item->source_y;
     }
 
-    // Log memory requirements
+    // Check memory requirements
     size_t dst_buf_size = item->width * item->height * sizeof(lv_color_t);
     size_t free_heap = esp_get_free_heap_size();
     size_t largest_block = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
@@ -826,57 +817,58 @@ static lv_obj_t *create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
     ESP_LOGI(TAG, "Memory available - Free heap: %d bytes, Largest free block: %d bytes",
         free_heap, largest_block);
 
-    // Check if we have enough memory for the full buffer
     if (dst_buf_size > largest_block) {
-        ESP_LOGW(TAG, "Not enough contiguous memory for full image, using tiled approach");
+        ESP_LOGW(TAG, "Not enough contiguous memory, using tiled approach");
 
-        // Create a canvas object instead
+        // Create a canvas object
         lv_obj_t *canvas = lv_canvas_create(parent);
+        if (!canvas) {
+            ESP_LOGE(TAG, "Failed to create canvas object");
+            return NULL;
+        }
 
         // Set position
         lv_obj_set_pos(canvas, item->x, item->y);
 
-        // Determine a reasonable tile size based on available memory
-        // Use at most 1/4 of the largest available block to be safe
-        size_t max_tile_bytes = largest_block / 4;
+        // Determine tile size based on available memory
+        size_t max_tile_bytes = largest_block / 4; // Use 1/4 of largest block to be safe
         int max_tile_pixels = max_tile_bytes / sizeof(lv_color_t);
+        int tile_height = 16; // Start with a reasonable minimum height
         int tile_width = item->width;
-        int tile_height = max_tile_pixels / tile_width;
 
-        // Ensure tile height is at least 1 pixel
-        if (tile_height < 1) {
-            tile_height = 1;
-            tile_width = max_tile_pixels;
-            if (tile_width < 1) {
-                tile_width = 1; // Absolute minimum
+        // Adjust tile dimensions if needed
+        if (tile_width * tile_height > max_tile_pixels) {
+            tile_height = max_tile_pixels / tile_width;
+            if (tile_height < 1) {
+                tile_height = 1;
+                tile_width = max_tile_pixels;
             }
         }
+
+        ESP_LOGI(TAG, "Using tiles of size %dx%d pixels", tile_width, tile_height);
 
         // Allocate buffer for a single tile
         size_t tile_buf_size = tile_width * tile_height * sizeof(lv_color_t);
         lv_color_t *tile_buf = malloc(tile_buf_size);
         if (!tile_buf) {
-            ESP_LOGE(TAG, "Failed to allocate memory even for a small tile (%d bytes)", tile_buf_size);
+            ESP_LOGE(TAG, "Failed to allocate memory for tile buffer");
+            lv_obj_del(canvas);
             return NULL;
         }
 
-        ESP_LOGI(TAG, "Using tiles of size %dx%d pixels (%d bytes each)",
-            tile_width, tile_height, tile_buf_size);
-
-        // Create a canvas buffer for the entire image
+        // Set up the canvas with the tile buffer
         lv_canvas_set_buffer(canvas, tile_buf, tile_width, tile_height, LV_COLOR_FORMAT_NATIVE);
 
         // Process the image in tiles
         const uint32_t *src_img = (const uint32_t *) item->data.image_data_with_size.pix;
 
-        // Draw each tile
         for (int ty = 0; ty < item->height; ty += tile_height) {
-            int current_tile_height = (ty + tile_height > item->height) ? (item->height - ty) : tile_height;
+            int current_tile_height = MIN(tile_height, item->height - ty);
 
             for (int tx = 0; tx < item->width; tx += tile_width) {
-                int current_tile_width = (tx + tile_width > item->width) ? (item->width - tx) : tile_width;
+                int current_tile_width = MIN(tile_width, item->width - tx);
 
-                // Process this tile
+                // Process current tile
                 for (int y = 0; y < current_tile_height; y++) {
                     for (int x = 0; x < current_tile_width; x++) {
                         // Calculate source coordinates
@@ -903,7 +895,6 @@ static lv_obj_t *create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
 
                         // If pixel is transparent and we have a background color
                         if (a < 128 && item->brcolor != 0) {
-                            // Use background color
                             r = (item->brcolor >> 24) & 0xFF;
                             g = (item->brcolor >> 16) & 0xFF;
                             b = (item->brcolor >> 8) & 0xFF;
@@ -914,23 +905,22 @@ static lv_obj_t *create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
                     }
                 }
 
-                // Draw the tile to the screen
-                // In a real implementation, you would need to copy this tile to the screen
-                // For now, we're just demonstrating the concept
+                // Force a refresh after each tile
+                lv_refr_now(lv_display_get_default());
             }
         }
 
-        // We keep the tile buffer allocated as it's used by the canvas
+        // Add destructor callback to free the tile buffer
+        lv_obj_add_event_cb(canvas, image_obj_destructor_cb, LV_EVENT_DELETE, tile_buf);
+
         return canvas;
     } else {
-        // We have enough memory, use the original approach
+        // We have enough memory, use a single buffer
         lv_color_t *dst_buf = malloc(dst_buf_size);
         if (!dst_buf) {
             ESP_LOGE(TAG, "Failed to allocate memory for scaled image buffer (%d bytes)", dst_buf_size);
             return NULL;
         }
-
-        ESP_LOGI(TAG, "Successfully allocated destination buffer");
 
         // Process the image
         const uint32_t *src_img = (const uint32_t *) item->data.image_data_with_size.pix;
@@ -959,7 +949,6 @@ static lv_obj_t *create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
 
                 // If pixel is transparent and we have a background color
                 if (a < 128 && item->brcolor != 0) {
-                    // Use background color
                     r = (item->brcolor >> 24) & 0xFF;
                     g = (item->brcolor >> 16) & 0xFF;
                     b = (item->brcolor >> 8) & 0xFF;
@@ -987,12 +976,18 @@ static lv_obj_t *create_scaled_cropped_image_efficient(lv_obj_t *parent, BaseDis
         // Create an LVGL image
         ESP_LOGI(TAG, "Creating LVGL image object for scaled/cropped image");
         lv_obj_t *img = lv_image_create(parent);
+        if (!img) {
+            ESP_LOGE(TAG, "Failed to create LVGL image object");
+            free(dst_buf);
+            free(img_dsc);
+            return NULL;
+        }
+
         lv_image_set_src(img, img_dsc);
         lv_obj_set_pos(img, item->x, item->y);
 
-        // Note: This creates a memory leak as we don't free the buffer
-        // In a real implementation, you'd need to handle this properly
-        ESP_LOGW(TAG, "Warning - scaled image buffer not freed (memory leak)");
+        // Add destructor callback to free memory when the image is deleted
+        lv_obj_add_event_cb(img, image_obj_destructor_cb, LV_EVENT_DELETE, img_dsc);
 
         return img;
     }
